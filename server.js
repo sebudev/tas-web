@@ -6,6 +6,7 @@
 const express = require('express');
 const multer = require('multer');
 const { execFile, spawn } = require('child_process');
+const { Readable } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -445,24 +446,30 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
   res.json({ jobs: jobsOut });
 });
 
-// upload dari URL (server yang download)
+// upload dari URL (server yang download) — STREAM ke disk, jangan buffer di RAM
 app.post('/api/upload-url', (req, res) => {
   const url = (req.body?.url || '').trim();
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'URL tidak valid' });
   const job = createJob(url.slice(0, 60));
   const filePath = path.join(TMP_DIR, 'url-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'));
   (async () => {
+    let ws = null;
     try {
       const r = await fetch(url, { redirect: 'follow' });
       if (!r.ok) throw new Error('Gagal download: HTTP ' + r.status);
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (!buf.length) throw new Error('File kosong');
-      fs.writeFileSync(filePath, buf);
+      ws = fs.createWriteStream(filePath);
+      await new Promise((resolve, reject) => {
+        Readable.fromWeb(r.body).pipe(ws)
+          .on('finish', resolve)
+          .on('error', reject);
+      });
+      const st = fs.statSync(filePath);
+      if (!st.size) throw new Error('File kosong');
       const name = (req.body?.name || decodeURIComponent(url.split('/').pop() || 'download')).split('?')[0].slice(0, 200);
       pushJob(job, filePath, name);
     } catch (e) {
       finishJob(job, e);
-      try { fs.unlinkSync(filePath); } catch {}
+      try { if (ws) ws.destroy(); fs.unlinkSync(filePath); } catch {}
     }
   })();
   res.json({ jobId: job.id, name: job.name });
