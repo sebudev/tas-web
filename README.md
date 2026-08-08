@@ -16,7 +16,7 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 - **🗜️ Download ZIP** — pilih banyak file → download jadi satu archive
 - **📊 Dashboard** — stats storage, breakdown tipe file, aktivitas, share aktif
 - **🔁 Retry upload** — job gagal bisa diulang
-- **🗑 Delete hard** — hapus dari index + chat Telegram
+- **🗑 Delete hard (multi)** — hapus 1 atau banyak file sekaligus (index + chat Telegram)
 - **Anonim di bot** — caption chunk tidak membocorkan nama asli file
 
 ## 🏗️ Arsitektur

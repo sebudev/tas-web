@@ -139,7 +139,7 @@ async function load() {
     state.files = data.files || [];
     state.page = 0;
     state.selected.clear();
-    $('#sel-count').textContent = '0';
+    updateSelUI();
     applyFilters();
     loadStatus();
   } catch (e) {
@@ -192,9 +192,16 @@ function render() {
 function toggleSelect(f, el) {
   if (state.selected.has(f.hash)) state.selected.delete(f.hash);
   else state.selected.add(f.hash);
-  $('#sel-count').textContent = state.selected.size;
-  $('#zip-btn').disabled = state.selected.size === 0;
+  updateSelUI();
   if (el) el.classList.toggle('selected', state.selected.has(f.hash));
+}
+
+function updateSelUI() {
+  const n = state.selected.size;
+  $('#sel-count').textContent = n;
+  $('#del-count').textContent = n;
+  $('#zip-btn').disabled = n === 0;
+  $('#del-btn').disabled = n === 0;
 }
 
 function renderGrid(items) {
@@ -547,11 +554,38 @@ $('#select-btn').addEventListener('click', () => {
   state.selectMode = !state.selectMode;
   if (!state.selectMode) {
     state.selected.clear();
-    $('#sel-count').textContent = '0';
-    $('#zip-btn').disabled = true;
+    updateSelUI();
   }
   $('#select-btn').classList.toggle('active-sel', state.selectMode);
   render();
+});
+
+// delete multiple — hapus semua file terpilih (hard: index + Telegram)
+$('#del-btn').addEventListener('click', async () => {
+  const n = state.selected.size;
+  if (!n) return;
+  if (!confirm(`Hapus ${n} file PERMANEN dari Telegram?\n\nFile dihapus dari index DAN pesan chunk di chat bot (tidak bisa dikembalikan).`)) return;
+  const ids = [...state.selected];
+  $('#del-btn').disabled = true;
+  let ok = 0;
+  for (let i = 0; i < ids.length; i++) {
+    toast(`🗑 Menghapus ${i + 1}/${ids.length}...`, 'running');
+    try {
+      const res = await fetch('/api/delete/' + encodeURIComponent(ids[i]), { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'gagal');
+      ok++;
+    } catch (e) {
+      toast(`Gagal hapus #${i + 1}: ${e.message}`, 'err');
+    }
+    await new Promise((r) => setTimeout(r, 500)); // jeda antar delete (anti rate-limit)
+  }
+  state.selected.clear();
+  state.selectMode = false;
+  $('#select-btn').classList.remove('active-sel');
+  updateSelUI();
+  toast(`🗑 ${ok}/${n} file dihapus`, ok === n ? 'ok' : 'err');
+  load();
 });
 
 $('#zip-btn').addEventListener('click', async () => {
