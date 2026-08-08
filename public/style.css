@@ -239,6 +239,9 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 [data-theme="light"] .chip { background: var(--bg-2); }
 [data-theme="light"] .job-line.done { color: #1a9c50; }
 [data-theme="light"] .toast { background: var(--card); }
+/* modal: backdrop terang di light mode (preview & dialog) + tombol ✕ kontras */
+[data-theme="light"] .modal-backdrop { background: rgba(244,244,249,.92); }
+[data-theme="light"] .modal-x { background: rgba(0,0,0,.1); color: var(--text); }
 
 .modal-x {
   position: absolute;
