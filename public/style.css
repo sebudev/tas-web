@@ -231,6 +231,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
   --accent-2: #0094c2;
 }
 [data-theme="light"] body { background: var(--bg); }
+[data-theme="light"] .topbar { background: rgba(255,255,255,.85); }
 [data-theme="light"] .card-info .text { color: rgba(0,0,0,.6); }
 [data-theme="light"] .dropzone:hover, [data-theme="light"] .dropzone.over { background: rgba(0,0,0,.03); }
 [data-theme="light"] .tag { background: rgba(0,0,0,.05); color: var(--text-dim); }
