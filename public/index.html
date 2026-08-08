@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tas · Telegram Storage</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  .crumb { color: var(--text-dim); font-weight: 400; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin: 16px 0 4px; flex-wrap: wrap; }
+  .btn { background: var(--accent); border: none; color: #fff; font-weight: 600; font-size: 13px;
+         padding: 9px 16px; border-radius: 10px; cursor: pointer; }
+  .btn:hover { filter: brightness(1.15); }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.ghost:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .btn.danger { background: rgba(231,76,60,.15); color: #e74c3c; border: 1px solid rgba(231,76,60,.4); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .search-input { flex: 1; min-width: 180px; }
+  .dropzone { border: 2px dashed var(--border); border-radius: 14px; padding: 26px; text-align: center;
+              color: var(--text-dim); font-size: 13px; margin: 10px 0 6px; cursor: pointer; transition: all .2s; }
+  .dropzone:hover, .dropzone.over { border-color: var(--accent); color: var(--text); background: rgba(255,255,255,.03); }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin-top: 14px; }
+  .fcard { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+           cursor: pointer; transition: border-color .15s; display: flex; flex-direction: column; gap: 8px; }
+  .fcard:hover { border-color: var(--accent); }
+  .fcard .fname { font-weight: 600; font-size: 13px; word-break: break-all; line-height: 1.35; }
+  .fcard .fmeta { font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; gap: 8px; }
+  .fcard .ficon { font-size: 26px; }
+  .fcard .ftags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { font-size: 10px; background: rgba(255,255,255,.06); border: 1px solid var(--border);
+         padding: 2px 8px; border-radius: 999px; color: var(--text-dim); }
+  .setup-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 28px;
+               text-align: center; color: var(--text-dim); font-size: 14px; margin-top: 30px; }
+  .setup-box code { background: rgba(255,255,255,.07); padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+  .job-line { font-size: 12px; color: var(--text-dim); padding: 4px 0; }
+  .job-line.running { color: var(--accent); }
+  .job-line.error { color: #e74c3c; }
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .progress { height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .4s; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="logo"><span class="logo-mark">✦</span> tas <span class="crumb">/ telegram storage</span></div>
+  <div class="stats">
+    <span id="stat-files">0</span> file
+    <span class="dot"></span>
+    <span id="stat-size">0 B</span>
+    <span class="dot"></span>
+    <span id="stat-save">0%</span> hemat
+  </div>
+</header>
+
+<div id="toast" class="toast hidden"></div>
+
+<main>
+  <div class="toolbar">
+    <button id="upload-btn" class="btn">⬆ Upload</button>
+    <input type="file" id="file-input" hidden>
+    <button id="refresh-btn" class="btn ghost">↻ Refresh</button>
+    <input id="search" class="search-input" type="search" placeholder="Cari file..." autocomplete="off">
+  </div>
+
+  <div id="dropzone" class="dropzone">📁 Tarik &amp; lepas file di sini, atau klik untuk upload — dienkripsi AES-256-GCM ke Telegram</div>
+
+  <div id="jobs"></div>
+  <div id="loading" class="loading">Memuat file...</div>
+  <div id="empty" class="empty hidden">Belum ada file. Upload file pertama kamu! 🚀</div>
+  <div id="setup" class="setup-box hidden"></div>
+  <div id="grid" class="card-grid"></div>
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-backdrop" id="modal-close"></div>
+  <div class="modal-body">
+    <div class="modal-content" id="modal-content"></div>
+    <div class="modal-meta" id="modal-meta"></div>
+    <div class="actions" id="modal-actions"></div>
+    <button class="modal-x" id="modal-x">✕</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

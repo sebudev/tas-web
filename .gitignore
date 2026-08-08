@@ -1,0 +1,13 @@
+# Sensitif — jangan pernah commit
+.env
+.env.*
+data/
+*.pem
+*.key
+
+# Runtime & deps
+node_modules/
+*.log
+
+# OS
+.DS_Store
