@@ -79,6 +79,16 @@
   .logout-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 8px;
                 padding: 5px 10px; font-size: 12px; cursor: pointer; }
   .logout-btn:hover { color: #e74c3c; border-color: #e74c3c; }
+  @media (max-width: 700px) {
+    .toolbar { gap: 6px; }
+    .btn { padding: 8px 11px; font-size: 12px; }
+    .search-input { order: 99; flex-basis: 100%; min-width: 0; }
+    .card-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    .fcard .fmeta { flex-wrap: wrap; }
+    .dlg-row { flex-direction: column; }
+    .job-line .progress { max-width: 80px; }
+    .stat-grid { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+  }
 </style>
 </head>
 <body>
