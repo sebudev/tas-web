@@ -6,6 +6,7 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 ## ✨ Fitur
 
 - **🔐 Auth** — login password (SQLite: users + sessions), API token untuk integrasi
+- **🤖 Multi-bot** — kelola beberapa bot Telegram (storage terpisah) + switch kapan saja
 - **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL
 - **▶️ Preview in-browser** — video player & gambar (streaming HTTP Range, seek-able)
 - **🔗 Share link** — link kadaluarsa + batas download (publik tanpa login)
@@ -48,6 +49,9 @@ docker exec -it tas-web tas init
 | Endpoint | Auth | Fungsi |
 |----------|------|--------|
 | `POST /api/login` · `POST /api/logout` · `GET /api/me` | – | Auth |
+| `GET /api/profiles` · `POST /api/profiles` | ✅ | Daftar / buat bot profile |
+| `POST /api/profiles/:id/init` | ✅ | Init bot (token via env TAS_BOT_TOKEN) |
+| `POST /api/profiles/:id/switch` · `DELETE /api/profiles/:id` | ✅ | Switch / hapus bot |
 | `GET /api/status` · `GET /api/files` | ✅ | Status & daftar file |
 | `POST /api/upload` (multi) · `POST /api/upload-url` | ✅ | Upload file / dari URL |
 | `POST /api/upload/retry/:jobId` · `GET /api/jobs` | ✅ | Job upload |

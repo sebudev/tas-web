@@ -16,6 +16,10 @@ RUN node patch-caption.js && rm patch-caption.js
 COPY patch-chunks.js .
 RUN node patch-chunks.js && rm patch-chunks.js
 
+# Patch: `tas init` bisa non-interaktif (token/password dari env)
+COPY patch-init-env.js .
+RUN node patch-init-env.js && rm patch-init-env.js
+
 WORKDIR /app
 COPY package.json .
 RUN npm install --omit=dev

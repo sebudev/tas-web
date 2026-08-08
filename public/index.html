@@ -83,7 +83,10 @@
 <body>
 <header class="topbar">
   <div class="logo"><span class="logo-mark">✦</span> tas <span class="crumb">/ telegram storage</span></div>
-  <button class="btn ghost small" id="dash-btn">📊</button>
+  <select id="bot-select" class="sort-select" title="Switch storage bot"></select>
+  <button class="btn ghost small" id="add-bot-btn" title="Tambah bot">➕</button>
+  <button class="btn ghost small hidden" id="bot-del-btn" title="Hapus bot">🗑</button>
+  <button class="btn ghost small" id="dash-btn" title="Dashboard">📊</button>
   <div class="stats">
     <span id="stat-files">0</span> file
     <span class="dot"></span>
@@ -136,6 +139,26 @@
     <div class="modal-meta" id="preview-meta"></div>
     <div class="actions" id="preview-actions"></div>
     <button class="modal-x" id="preview-x">✕</button>
+  </div>
+</div>
+
+<!-- Add bot dialog -->
+<div id="bot-dlg" class="modal hidden">
+  <div class="modal-backdrop" id="bot-close"></div>
+  <div class="modal-body" style="padding:20px">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;width:100%;max-width:380px">
+      <h3 style="font-size:15px;margin-bottom:4px">🤖 Tambah Storage Bot</h3>
+      <div class="dlg-label" style="margin-bottom:8px">Buat bot baru dulu di Telegram: pesan <b>@BotFather</b> → <b>/newbot</b> → salin token-nya.</div>
+      <div class="dlg-label">Nama profile</div>
+      <input class="dlg-input" type="text" id="bot-name" placeholder="mis. Bot Cadangan">
+      <div class="dlg-label">Bot token</div>
+      <input class="dlg-input" type="password" id="bot-token" placeholder="123456:ABC-DEF..." autocomplete="off">
+      <div class="dlg-label">Password enkripsi (min 8 karakter — beda per bot boleh)</div>
+      <input class="dlg-input" type="password" id="bot-pass" autocomplete="new-password">
+      <div class="dlg-label" id="bot-progress" style="color:var(--accent);min-height:34px"></div>
+      <button class="btn" id="bot-create" style="width:100%">🚀 Buat &amp; Init</button>
+      <button class="modal-x" id="bot-x" style="top:8px;right:8px;width:32px;height:32px">✕</button>
+    </div>
   </div>
 </div>
 

@@ -31,7 +31,7 @@ app.use(express.json());
 // CORS: untuk integrasi API dari app lain
 app.use('/api', (req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -100,11 +100,156 @@ function requireAuth(req, res, next) {
 }
 app.use(requireAuth);
 
-// ---------------- TAS helpers ----------------
-function tasEnv() {
-  return { ...process.env, TAS_PASSWORD, TAS_DATA_DIR };
+// ---------------- multi-bot profiles ----------------
+db.exec(`CREATE TABLE IF NOT EXISTS profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT,
+  bot_username TEXT DEFAULT '',
+  data_dir TEXT UNIQUE,
+  password TEXT DEFAULT '',
+  initialized INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 0,
+  created_at INTEGER
+)`);
+
+function seedDefaultProfile() {
+  const n = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
+  if (n > 0) return;
+  const hasConfig = fs.existsSync(path.join(TAS_DATA_DIR, 'config.json'));
+  db.prepare('INSERT INTO profiles (name, bot_username, data_dir, password, initialized, is_active, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('Default', '', TAS_DATA_DIR, TAS_PASSWORD, hasConfig ? 1 : 0, 1, Date.now());
+  console.log('🌱 seed profile Default (data: ' + TAS_DATA_DIR + (hasConfig ? ', sudah init' : '') + ')');
+}
+seedDefaultProfile();
+// backfill: data dir yang sudah punya config.json → tandai initialized
+for (const p of db.prepare('SELECT * FROM profiles').all()) {
+  if (!p.initialized && fs.existsSync(path.join(p.data_dir, 'config.json'))) {
+    db.prepare('UPDATE profiles SET initialized=1 WHERE id=?').run(p.id);
+  }
 }
 
+let activeProfile = db.prepare('SELECT * FROM profiles WHERE is_active=1').get() ||
+  db.prepare('SELECT * FROM profiles ORDER BY id LIMIT 1').get();
+
+function setActiveProfile(id) {
+  db.prepare('UPDATE profiles SET is_active=0').run();
+  db.prepare('UPDATE profiles SET is_active=1 WHERE id=?').run(id);
+  activeProfile = db.prepare('SELECT * FROM profiles WHERE id=?').get(id);
+}
+
+function tasEnv(profile = activeProfile) {
+  if (!profile) return { ...process.env, TAS_PASSWORD, TAS_DATA_DIR };
+  return { ...process.env, TAS_PASSWORD: profile.password || '', TAS_DATA_DIR: profile.data_dir };
+}
+
+function toProfile(p) {
+  return {
+    id: p.id, name: p.name, botUsername: p.bot_username,
+    initialized: !!p.initialized, isActive: !!p.is_active, createdAt: p.created_at,
+  };
+}
+
+const initJobs = new Map(); // profileId -> {status, message, botUsername}
+
+// ---------------- profiles API ----------------
+app.get('/api/profiles', (req, res) => {
+  const rows = db.prepare('SELECT * FROM profiles ORDER BY id').all();
+  res.json({ profiles: rows.map(toProfile), activeId: activeProfile.id });
+});
+
+app.get('/api/profiles/:id', (req, res) => {
+  const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
+  const job = initJobs.get(p.id);
+  const initState = job ? job : (p.initialized
+    ? { status: 'done', message: 'Siap' }
+    : { status: 'idle', message: 'Belum di-init' });
+  res.json({ ...toProfile(p), initState });
+});
+
+app.post('/api/profiles', (req, res) => {
+  const n = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
+  const name = (req.body?.name || '').trim().slice(0, 50) || ('Bot ' + (n + 1));
+  const dir = path.join(TAS_DATA_DIR, 'profiles', String(Date.now()));
+  fs.mkdirSync(dir, { recursive: true });
+  const info = db.prepare('INSERT INTO profiles (name, data_dir, created_at) VALUES (?,?,?)')
+    .run(name, dir, Date.now());
+  logActivity('profile', 'create ' + name);
+  res.json(toProfile(db.prepare('SELECT * FROM profiles WHERE id=?').get(info.lastInsertRowid)));
+});
+
+app.post('/api/profiles/:id/init', (req, res) => {
+  const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
+  const token = (req.body?.token || '').trim();
+  const password = req.body?.password || '';
+  if (!token.includes(':')) return res.status(400).json({ error: 'Token bot tidak valid' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password minimal 8 karakter' });
+  const existing = initJobs.get(p.id);
+  if (existing && existing.status === 'running') return res.status(400).json({ error: 'Init sedang berjalan' });
+
+  db.prepare('UPDATE profiles SET password=? WHERE id=?').run(password, p.id);
+  const job = { status: 'running', message: 'Menghubungkan ke Telegram...', botUsername: '' };
+  initJobs.set(p.id, job);
+  logActivity('profile', 'init ' + p.name);
+
+  const child = spawn('tas', ['init'], {
+    env: {
+      ...process.env,
+      TAS_PASSWORD: password,
+      TAS_DATA_DIR: p.data_dir,
+      TAS_BOT_TOKEN: token, // patch-init-env: init non-interaktif
+    },
+  });
+  let out = '';
+  child.stdout.on('data', (d) => { out = (out + d).slice(-1200); });
+  child.stderr.on('data', (d) => { out = (out + d).slice(-1200); });
+
+  child.on('error', (err) => {
+    job.status = 'error';
+    job.message = err.message;
+  });
+  child.on('close', (code) => {
+    if (code === 0) {
+      const m = out.match(/Connected as @([A-Za-z0-9_]+)/);
+      job.botUsername = m ? m[1] : '';
+      db.prepare('UPDATE profiles SET initialized=1, bot_username=? WHERE id=?').run(job.botUsername, p.id);
+      job.status = 'done';
+      job.message = 'Tersambung ke @' + job.botUsername;
+    } else {
+      job.status = 'error';
+      job.message = out.slice(-220) || ('exit ' + code);
+    }
+    // job sengaja DIPERTAHANKAN di map (terminal state) — biar error/done
+    // terakhir masih kebaca; di-overwrite saat init berikutnya
+  });
+  res.json({ ok: true, profileId: p.id });
+});
+
+app.post('/api/profiles/:id/switch', (req, res) => {
+  const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
+  setActiveProfile(p.id);
+  logActivity('profile', 'switch → ' + p.name);
+  res.json({ ok: true, active: toProfile(p) });
+});
+
+app.delete('/api/profiles/:id', (req, res) => {
+  const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
+  const c = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
+  if (c <= 1) return res.status(400).json({ error: 'Tidak bisa hapus profile terakhir' });
+  db.prepare('DELETE FROM profiles WHERE id=?').run(p.id);
+  if (p.is_active) {
+    const next = db.prepare('SELECT * FROM profiles ORDER BY id LIMIT 1').get();
+    setActiveProfile(next.id);
+  }
+  logActivity('profile', 'delete ' + p.name);
+  // data dir TIDAK dihapus (aman) — biar file di Telegram tetap bisa diakses lagi
+  res.json({ ok: true, dataDirKept: p.data_dir });
+});
+
+// ---------------- TAS helpers ----------------
 function runTas(args, timeoutMs = 900000) {
   return new Promise((resolve, reject) => {
     execFile('tas', args, { env: tasEnv(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {

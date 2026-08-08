@@ -488,9 +488,120 @@ dz.addEventListener('drop', (e) => {
   if (e.dataTransfer.files.length) enqueueUploads([...e.dataTransfer.files]);
 });
 
+// ---------------- multi-bot (switch storage bot) ----------------
+let profiles = [];
+
+async function loadProfiles() {
+  try {
+    const res = await fetch('/api/profiles');
+    const data = await res.json();
+    profiles = data.profiles || [];
+    const sel = $('#bot-select');
+    sel.innerHTML = profiles.map((p) =>
+      `<option value="${p.id}" ${p.isActive ? 'selected' : ''}>${p.initialized ? '🤖' : '📦'} ${escapeHtml(p.name)}${p.botUsername ? ' (@' + escapeHtml(p.botUsername) + ')' : ''}${p.isActive ? ' ✓' : ''}</option>`).join('');
+    $('#bot-del-btn').classList.toggle('hidden', profiles.length <= 1);
+  } catch (e) { /* ignore */ }
+}
+
+$('#bot-select').addEventListener('change', async (e) => {
+  const id = e.target.value;
+  if (!id) return;
+  try {
+    const res = await fetch('/api/profiles/' + id + '/switch', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal switch');
+    toast('Storage bot diganti: ' + data.active.name, 'ok');
+    load();
+    loadStatus();
+  } catch (err) { toast('Gagal switch: ' + err.message, 'err'); }
+});
+
+$('#add-bot-btn').addEventListener('click', () => {
+  $('#bot-progress').textContent = '';
+  $('#bot-progress').style.color = '';
+  $('#bot-dlg').classList.remove('hidden');
+});
+$('#bot-close').addEventListener('click', () => $('#bot-dlg').classList.add('hidden'));
+$('#bot-x').addEventListener('click', () => $('#bot-dlg').classList.add('hidden'));
+
+$('#bot-create').addEventListener('click', async () => {
+  const btn = $('#bot-create');
+  const name = $('#bot-name').value.trim();
+  const token = $('#bot-token').value.trim();
+  const pass = $('#bot-pass').value;
+  if (!token.includes(':')) return toast('Token bot tidak valid', 'err');
+  if (pass.length < 8) return toast('Password minimal 8 karakter', 'err');
+  btn.disabled = true;
+  $('#bot-progress').textContent = 'Membuat profile...';
+  try {
+    const cre = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const prof = await cre.json();
+    if (!cre.ok) throw new Error(prof.error || 'gagal buat profile');
+    $('#bot-progress').textContent = 'Init: menghubungkan ke Telegram...';
+    const ini = await fetch('/api/profiles/' + prof.id + '/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password: pass }),
+    });
+    const iniData = await ini.json();
+    if (!ini.ok) throw new Error(iniData.error || 'gagal init');
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      try {
+        const r = await fetch('/api/profiles/' + prof.id);
+        const d = await r.json();
+        const st = d.initState || {};
+        if (st.status === 'running') {
+          $('#bot-progress').textContent = '⏳ ' + (st.message || '...') +
+            (tries > 3 ? '\n📩 Sekarang kirim pesan apa saja ke bot barumu di Telegram!' : '');
+        } else if (st.status === 'done') {
+          clearInterval(poll);
+          $('#bot-progress').textContent = '✅ ' + (st.message || 'Tersambung');
+          await fetch('/api/profiles/' + prof.id + '/switch', { method: 'POST' });
+          loadProfiles();
+          load();
+          loadStatus();
+          toast('Bot baru aktif! 🎉', 'ok');
+          setTimeout(() => { $('#bot-dlg').classList.add('hidden'); btn.disabled = false; }, 1200);
+        } else if (st.status === 'error') {
+          clearInterval(poll);
+          $('#bot-progress').style.color = '#e74c3c';
+          $('#bot-progress').textContent = '❌ ' + (st.message || 'gagal init');
+          btn.disabled = false;
+        }
+      } catch (e) { /* lanjut polling */ }
+    }, 2500);
+  } catch (e) {
+    $('#bot-progress').style.color = '#e74c3c';
+    $('#bot-progress').textContent = '❌ ' + e.message;
+    btn.disabled = false;
+  }
+});
+
+$('#bot-del-btn').addEventListener('click', async () => {
+  const active = profiles.find((p) => p.isActive);
+  if (!active) return;
+  if (!confirm(`Hapus bot "${active.name}"? File di Telegram TIDAK dihapus (cuma profile-nya dilepas).`)) return;
+  try {
+    const res = await fetch('/api/profiles/' + active.id, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'gagal hapus');
+    toast('Bot dihapus, switch ke profile lain', 'ok');
+    loadProfiles();
+    load();
+    loadStatus();
+  } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+});
+
 // ---------------- init ----------------
 (async () => {
   const me = await checkAuth();
   if (!me) return;
+  loadProfiles();
   load();
 })();
