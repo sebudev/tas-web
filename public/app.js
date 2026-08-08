@@ -62,6 +62,37 @@ function iconFor(name) {
 function isVideo(f) { return ['mp4', 'mkv', 'webm', 'mov', 'avi'].includes((f.filename || '').split('.').pop().toLowerCase()); }
 function isImage(f) { return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes((f.filename || '').split('.').pop().toLowerCase()); }
 
+// ---------------- tooltip (nama file penuh saat hover) ----------------
+let tipEl = null;
+function ensureTip() {
+  if (!tipEl) {
+    tipEl = document.createElement('div');
+    tipEl.className = 'tip';
+    document.body.appendChild(tipEl);
+  }
+  return tipEl;
+}
+function showTip(e, text) {
+  const t = ensureTip();
+  t.textContent = text;
+  t.classList.add('show');
+  moveTip(e);
+}
+function moveTip(e) {
+  const t = ensureTip();
+  const pad = 14;
+  t.style.left = Math.max(6, Math.min(e.clientX + pad, window.innerWidth - t.offsetWidth - pad)) + 'px';
+  t.style.top = Math.max(6, e.clientY + pad) + 'px';
+}
+function hideTip() {
+  if (tipEl) tipEl.classList.remove('show');
+}
+function attachTip(el, text) {
+  el.addEventListener('mouseenter', (e) => showTip(e, text));
+  el.addEventListener('mousemove', moveTip);
+  el.addEventListener('mouseleave', hideTip);
+}
+
 // ---------------- auth ----------------
 async function checkAuth() {
   try {
@@ -175,6 +206,7 @@ function render() {
         openPreview(i);
       }
     });
+    attachTip(card.querySelector('.fname'), f.filename || f.hash);
     grid.appendChild(card);
   });
   renderPager();
@@ -292,6 +324,7 @@ function uploadOne(file) {
         const data = JSON.parse(xhr.responseText);
         if (data.jobs && data.jobs.length) {
           toast(`⏳ ${file.name} diproses (encrypt + upload ke Telegram)...`, 'running');
+          pollJobs(); // pastikan polling jalan — job server baru ada setelah upload selesai
         } else {
           throw new Error(data.error || 'Gagal');
         }
@@ -332,8 +365,9 @@ async function pollJobs() {
       });
     });
 
-    if (active.length) {
-      setTimeout(pollJobs, 3000);
+    if (active.length || uploading || uploadQueue.length) {
+      // lanjut polling selama masih ada job aktif ATAU upload dalam antrian
+      setTimeout(pollJobs, 2500);
     } else if (state.jobs.length) {
       const last = state.jobs[state.jobs.length - 1];
       if (last && last.status === 'done') { toast(last.message, 'ok'); load(); }
