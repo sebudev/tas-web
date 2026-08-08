@@ -89,6 +89,9 @@
     .job-line .progress { max-width: 80px; }
     .stat-grid { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
   }
+  /* light mode: checkbox pilih harus tetap kelihatan (chip gelap + check putih) */
+  [data-theme="light"] .sel-box { background: rgba(0,0,0,.28); }
+  [data-theme="light"] .fcard.selected .sel-box { background: var(--accent-2); }
 </style>
 </head>
 <body>

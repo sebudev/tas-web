@@ -239,7 +239,6 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 [data-theme="light"] .chip { background: var(--bg-2); }
 [data-theme="light"] .job-line.done { color: #1a9c50; }
 [data-theme="light"] .toast { background: var(--card); }
-[data-theme="light"] .sel-box { background: rgba(255,255,255,.85); }
 
 .modal-x {
   position: absolute;
@@ -274,6 +273,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 @media (max-width: 700px) {
   .topbar { flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
   .stats { order: 9; flex-basis: 100%; margin-left: 0; white-space: normal; flex-wrap: wrap; }
+  main { padding: 14px; }
   .search-wrap { order: 3; flex-basis: 100%; max-width: none; }
   .dl-form { order: 4; flex-basis: 100%; }
   #dl-url { width: 100%; flex: 1; }
