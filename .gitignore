@@ -1,6 +1,7 @@
 # Sensitif — jangan pernah commit
 .env
 .env.*
+!.env.example
 data/
 *.pem
 *.key
