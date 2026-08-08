@@ -22,10 +22,20 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 ## 🏗️ Arsitektur
 
 ```
-node:20-slim container
-├── @nightowne/tas-cli (global) + patch caption anonim
+node:20-slim container (multi-stage)
+├── @nightowne/tas-cli (global) + 3 patch (caption, chunk 18MB, init env)
 ├── server.js  → Express (auth SQLite, API, streaming, share, zip)
-└── public/    → frontend design system xbook (login + app)
+└── public/    → frontend Vue 3 + Vite + Tailwind (components-first)
+                  (dibuild di stage Docker, design system dipertahankan)
+```
+
+## 🧑‍💻 Development frontend
+
+```bash
+cd frontend
+npm install
+npm run dev   # dev server + proxy ke localhost:8001
+npm run build # build ke dist/
 ```
 
 ## 🚀 Deploy
