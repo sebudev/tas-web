@@ -1,3 +1,12 @@
+# ---- Stage 1: build frontend (Vue + Vite + Tailwind) ----
+FROM node:20-slim AS frontend
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY frontend/ .
+RUN npm run build
+
+# ---- Stage 2: runtime ----
 FROM node:20-slim
 
 # better-sqlite3 butuh build tools kalau prebuild gagal
@@ -25,7 +34,8 @@ COPY package.json .
 RUN npm install --omit=dev
 
 COPY server.js .
-COPY public/ ./public/
+# hasil build frontend (Vue) → diserve oleh express.static
+COPY --from=frontend /build/dist ./public/
 RUN mkdir -p /data
 
 ENV TAS_DATA_DIR=/data

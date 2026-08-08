@@ -111,7 +111,8 @@ function requireAuth(req, res, next) {
   if (pub || isStatic) return next();
   if (ctx.user) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
-  return res.redirect('/login.html');
+  // halaman SPA (shell) publik — tidak ada data sensitif; auth di-handle client-side
+  return next();
 }
 app.use(requireAuth);
 
