@@ -12,6 +12,10 @@ RUN npm install -g @nightowne/tas-cli@2.4.1
 COPY patch-caption.js .
 RUN node patch-caption.js && rm patch-caption.js
 
+# Patch: chunk 49MB -> 18MB (Bot API getFile limit 20MB utk download)
+COPY patch-chunks.js .
+RUN node patch-chunks.js && rm patch-chunks.js
+
 WORKDIR /app
 COPY package.json .
 RUN npm install --omit=dev
