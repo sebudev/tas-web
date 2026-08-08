@@ -6,6 +6,7 @@ import { fmtBytes } from '../store';
 import { loadProfiles, switchProfile, deleteProfile, loadStatus } from '../composables/useApp';
 import { apiPost } from '../composables/useApi';
 import { toast } from '../composables/useToast';
+import { confirmDialog } from '../composables/useConfirm';
 import BotDialog from './BotDialog.vue';
 import DashboardModal from './DashboardModal.vue';
 
@@ -28,7 +29,12 @@ async function onSwitch(e) {
 async function onDeleteBot() {
   const p = activeProfile.value;
   if (!p) return;
-  if (!confirm(`Hapus bot "${p.name}"? File di Telegram TIDAK dihapus (cuma profile-nya dilepas).`)) return;
+  const ok = await confirmDialog({
+    title: 'Hapus bot?',
+    message: `Hapus bot "${p.name}" (@${p.botUsername || '?'})?\n\nFile di Telegram TIDAK dihapus — cuma profile-nya dilepas dari tas-web.`,
+    confirmText: 'Hapus Bot',
+  });
+  if (!ok) return;
   await deleteProfile(p.id);
 }
 

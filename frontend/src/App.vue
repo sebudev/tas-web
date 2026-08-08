@@ -5,6 +5,7 @@ import { store } from './store';
 import { apiGet } from './composables/useApi';
 import ToastStack from './components/ToastStack.vue';
 import Tip from './components/Tip.vue';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -25,5 +26,6 @@ onMounted(async () => {
 <template>
   <ToastStack />
   <Tip />
+  <ConfirmDialog />
   <router-view />
 </template>

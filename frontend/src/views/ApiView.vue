@@ -5,6 +5,7 @@ import { store, fmtDateTime } from '../store';
 import { apiGet, apiPost, apiDelete } from '../composables/useApi';
 import { loadProfiles, createToken } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { confirmDialog } from '../composables/useConfirm';
 
 const router = useRouter();
 const tokens = ref([]);
@@ -62,7 +63,12 @@ async function copyToken(t) {
 }
 
 async function del(id) {
-  if (!confirm('Hapus token ini sepenuhnya? Service yang memakainya langsung tidak bisa akses API.')) return;
+  const ok = await confirmDialog({
+    title: 'Hapus token?',
+    message: 'Hapus token ini sepenuhnya?\n\nService yang memakainya langsung tidak bisa akses API (401).',
+    confirmText: 'Hapus Token',
+  });
+  if (!ok) return;
   try {
     await apiDelete('/api/tokens/' + id);
     toast('Token dihapus', 'ok');

@@ -5,6 +5,7 @@ import { fmtBytes, fmtDate, iconFor, isVideo, isImage } from '../store';
 import { apiPost } from '../composables/useApi';
 import { loadFiles, createShare } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { confirmDialog } from '../composables/useConfirm';
 import ShareDialog from './ShareDialog.vue';
 
 const emit = defineEmits(['close']);
@@ -25,7 +26,12 @@ function close() {
 async function onDelete() {
   const f = file.value;
   if (!f) return;
-  if (!confirm(`Hapus "${f.filename}" permanen dari Telegram?`)) return;
+  const ok = await confirmDialog({
+    title: 'Hapus file?',
+    message: `Hapus "${f.filename}" permanen dari Telegram?\n\nFile dihapus dari index DAN pesan chunk di chat bot — tidak bisa dikembalikan.`,
+    confirmText: 'Hapus',
+  });
+  if (!ok) return;
   try {
     await apiPost('/api/delete/' + encodeURIComponent(f.hash));
     toast('File dihapus', 'ok');

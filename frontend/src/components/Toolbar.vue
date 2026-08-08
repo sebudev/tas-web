@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { store } from '../store';
 import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { confirmDialog } from '../composables/useConfirm';
 
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete']);
@@ -27,11 +28,16 @@ async function onUrl() {
 async function onDeleteMulti() {
   const n = store.selected.size;
   if (!n) return;
-  if (!confirm(`Hapus ${n} file PERMANEN dari Telegram?\n\nFile dihapus dari index DAN pesan chunk di chat bot (tidak bisa dikembalikan).`)) return;
+  const ok = await confirmDialog({
+    title: 'Hapus file?',
+    message: `Hapus ${n} file PERMANEN dari Telegram?\n\nFile dihapus dari index DAN pesan chunk di chat bot — tidak bisa dikembalikan.`,
+    confirmText: 'Hapus ' + n + ' File',
+  });
+  if (!ok) return;
   const ids = [...store.selected];
-  const ok = await deleteFiles(ids);
+  const okCount = await deleteFiles(ids);
   clearSelection();
-  toast('🗑 ' + ok + '/' + n + ' file dihapus', ok === n ? 'ok' : 'err');
+  toast('🗑 ' + okCount + '/' + n + ' file dihapus', okCount === n ? 'ok' : 'err');
   loadFiles();
 }
 
