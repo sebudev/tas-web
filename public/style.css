@@ -187,7 +187,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
   color: var(--text-dim);
   font-size: 15px;
 }
-.hidden { display: none; }
+.hidden { display: none !important; }
 
 /* Modal */
 .modal { position: fixed; inset: 0; z-index: 100; }
