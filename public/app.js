@@ -7,6 +7,7 @@ const state = {
   page: 0,
   search: '',
   sort: 'new',
+  view: localStorage.getItem('tasView') || 'grid', // grid | table
   selectMode: false,
   selected: new Set(),
   current: -1, // index di filtered (untuk preview nav)
@@ -178,12 +179,27 @@ function renderPager() {
 }
 
 function render() {
-  const grid = $('#grid');
-  grid.innerHTML = '';
   const items = pageItems();
   $('#empty').classList.toggle('hidden', items.length > 0);
   document.body.classList.toggle('select-mode', state.selectMode);
+  $('#grid').classList.toggle('hidden', state.view !== 'grid');
+  $('#table-wrap').classList.toggle('hidden', state.view !== 'table');
+  if (state.view === 'table') renderTable(items);
+  else renderGrid(items);
+  renderPager();
+}
 
+function toggleSelect(f, el) {
+  if (state.selected.has(f.hash)) state.selected.delete(f.hash);
+  else state.selected.add(f.hash);
+  $('#sel-count').textContent = state.selected.size;
+  $('#zip-btn').disabled = state.selected.size === 0;
+  if (el) el.classList.toggle('selected', state.selected.has(f.hash));
+}
+
+function renderGrid(items) {
+  const grid = $('#grid');
+  grid.innerHTML = '';
   items.forEach((f, i) => {
     const card = document.createElement('div');
     card.className = 'fcard' + (state.selected.has(f.hash) ? ' selected' : '');
@@ -197,11 +213,8 @@ function render() {
       tags;
     card.addEventListener('click', () => {
       if (state.selectMode) {
-        if (state.selected.has(f.hash)) state.selected.delete(f.hash);
-        else state.selected.add(f.hash);
-        $('#sel-count').textContent = state.selected.size;
-        $('#zip-btn').disabled = state.selected.size === 0;
-        card.classList.toggle('selected', state.selected.has(f.hash));
+        toggleSelect(f, card);
+        card.querySelector('.sel-box').textContent = state.selected.has(f.hash) ? '✓' : '';
       } else {
         openPreview(i);
       }
@@ -209,8 +222,61 @@ function render() {
     attachTip(card.querySelector('.fname'), f.filename || f.hash);
     grid.appendChild(card);
   });
-  renderPager();
 }
+
+function renderTable(items) {
+  const tbody = $('#ftable-body');
+  tbody.innerHTML = '';
+  items.forEach((f, i) => {
+    const sel = state.selected.has(f.hash);
+    const tr = document.createElement('tr');
+    tr.className = 'trow' + (sel ? ' selected' : '');
+    const tags = (f.tags || []).length
+      ? f.tags.map((t) => `<span class="tag">#${escapeHtml(t)}</span>`).join('') : '';
+    tr.innerHTML =
+      `<td class="col-check"><input type="checkbox" ${sel ? 'checked' : ''}></td>` +
+      `<td class="td-name"><span class="td-icon">${iconFor(f.filename || '')}</span>` +
+      `<span class="td-fname">${escapeHtml(f.filename || f.hash)}</span></td>` +
+      `<td class="col-size">${fmtBytes(f.original_size)}</td>` +
+      `<td class="col-date">${fmtDate(f.created_at)}</td>` +
+      `<td class="col-tags">${tags}</td>`;
+    tr.addEventListener('click', (e) => {
+      if (e.target.type === 'checkbox') return;
+      if (state.selectMode) {
+        toggleSelect(f, tr);
+        const cb = tr.querySelector('input[type="checkbox"]');
+        cb.checked = state.selected.has(f.hash);
+      } else {
+        openPreview(i);
+      }
+    });
+    tr.querySelector('input[type="checkbox"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSelect(f, tr);
+      e.target.checked = state.selected.has(f.hash);
+    });
+    attachTip(tr.querySelector('.td-fname'), f.filename || f.hash);
+    tbody.appendChild(tr);
+  });
+}
+
+function applyViewBtn() {
+  const t = $('#view-btn');
+  if (state.view === 'grid') {
+    t.textContent = '☰';
+    t.title = 'Tampilan tabel';
+  } else {
+    t.textContent = '⊞';
+    t.title = 'Tampilan kartu';
+  }
+}
+
+$('#view-btn').addEventListener('click', () => {
+  state.view = state.view === 'grid' ? 'table' : 'grid';
+  localStorage.setItem('tasView', state.view);
+  applyViewBtn();
+  render();
+});
 
 // ---------------- preview modal ----------------
 function openPreview(i) {
@@ -648,6 +714,7 @@ $('#bot-del-btn').addEventListener('click', async () => {
 (async () => {
   const me = await checkAuth();
   if (!me) return;
+  applyViewBtn();
   loadProfiles();
   load();
 })();

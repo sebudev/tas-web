@@ -9,6 +9,7 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 - **🤖 Multi-bot** — kelola beberapa bot Telegram (storage terpisah) + switch kapan saja
 - **🔑 API tokens per bot** — token integrasi terikat ke bot tertentu (halaman `/api.html`)
 - **🌗 Light mode** — toggle tema terang/gelap (tersimpan di browser)
+- **⊞/☰ Tampilan tabel & kartu** — switch view, pilihan tersimpan
 - **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL
 - **▶️ Preview in-browser** — video player & gambar (streaming HTTP Range, seek-able)
 - **🔗 Share link** — link kadaluarsa + batas download (publik tanpa login)
