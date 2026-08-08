@@ -385,7 +385,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS api_tokens (
 app.get('/api/tokens', (req, res) => {
   const rows = db.prepare(`SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at
     FROM api_tokens t LEFT JOIN profiles p ON p.id=t.profile_id ORDER BY t.id DESC`).all();
-  res.json({ tokens: rows.map((r) => ({ ...r, token: r.token.slice(0, 8) + '…' })) });
+  res.json({ tokens: rows });
 });
 
 app.post('/api/tokens', (req, res) => {
@@ -401,7 +401,9 @@ app.post('/api/tokens', (req, res) => {
 });
 
 app.delete('/api/tokens/:id', (req, res) => {
-  db.prepare('UPDATE api_tokens SET active=0 WHERE id=?').run(req.params.id);
+  // hard delete: hapus baris token sepenuhnya (bukan cuma nonaktifkan)
+  const info = db.prepare('DELETE FROM api_tokens WHERE id=?').run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'Token tidak ditemukan' });
   res.json({ ok: true });
 });
 

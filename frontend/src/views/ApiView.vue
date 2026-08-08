@@ -1,15 +1,16 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { store, fmtDateTime, escapeHtml } from '../store';
+import { store, fmtDateTime } from '../store';
 import { apiGet, apiPost, apiDelete } from '../composables/useApi';
-import { loadProfiles, createToken, revokeToken } from '../composables/useApp';
+import { loadProfiles, createToken } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 
 const router = useRouter();
 const tokens = ref([]);
 const tokName = ref('');
 const newToken = ref('');
+const copiedId = ref(null);
 
 async function loadTokens() {
   try {
@@ -18,24 +19,53 @@ async function loadTokens() {
   } catch { /* ignore */ }
 }
 
+async function copyText(text) {
+  // clipboard API hanya jalan di secure context (https/localhost)
+  // fallback: textarea + execCommand (jalan juga di http)
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* lanjut fallback */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { /* ignore */ }
+  ta.remove();
+  return ok;
+}
+
 async function create() {
   const profileId = store.activeId;
   if (!profileId) return toast('Pilih bot dulu', 'err');
   try {
     const data = await createToken(profileId, tokName.value);
     newToken.value = data.token;
-    navigator.clipboard?.writeText(data.token).catch(() => {});
+    await copyText(data.token);
     toast('Token dibuat & disalin!', 'ok');
     tokName.value = '';
     loadTokens();
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 
-async function revoke(id) {
-  if (!confirm('Revoke token ini? Service yang memakainya langsung tidak bisa akses API.')) return;
+async function copyToken(t) {
+  const ok = await copyText(t.token);
+  if (!ok) return toast('Gagal menyalin (blokir browser)', 'err');
+  copiedId.value = t.id;
+  setTimeout(() => { if (copiedId.value === t.id) copiedId.value = null; }, 1500);
+  toast('Token disalin!', 'ok');
+}
+
+async function del(id) {
+  if (!confirm('Hapus token ini sepenuhnya? Service yang memakainya langsung tidak bisa akses API.')) return;
   try {
-    await revokeToken(id);
-    toast('Token di-revoke', 'ok');
+    await apiDelete('/api/tokens/' + id);
+    toast('Token dihapus', 'ok');
     loadTokens();
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
@@ -70,13 +100,20 @@ onMounted(async () => {
       <div class="bg-card border border-line rounded-xl2 p-4 mt-3.5">
         <h3 class="text-sm mb-3">🔑 API tokens per bot</h3>
         <div v-if="!tokens.length" class="text-txt-dim text-[13px] py-2">Belum ada API token. Buat di atas 👆</div>
-        <div v-for="t in tokens" :key="t.id" class="flex items-center gap-2.5 py-2.5 border-b border-line last:border-0 flex-wrap">
-          <span class="font-mono text-xs bg-bg-2 border border-line rounded-lg px-2.5 py-1 text-txt-dim">{{ t.active ? '🟢' : '⚪' }} {{ t.token }}</span>
-          <div class="flex-1 min-w-[140px]">
+        <div v-for="t in tokens" :key="t.id" class="py-2.5 border-b border-line last:border-0 flex flex-col sm:flex-row sm:items-center gap-2">
+          <button
+            @click="copyToken(t)"
+            :title="'Klik untuk salin token'"
+            class="font-mono text-xs bg-bg-2 border border-line rounded-lg px-2.5 py-1.5 text-txt-dim break-all text-left cursor-pointer hover:border-accent hover:text-txt transition-colors shrink-0 sm:max-w-[320px]"
+            :class="{ 'border-emerald-500 text-emerald-500': copiedId === t.id }"
+          >
+            {{ copiedId === t.id ? '✓ Disalin' : (t.active ? '🟢' : '⚪') + ' ' + t.token }}
+          </button>
+          <div class="flex-1 min-w-0">
             <div class="font-semibold text-[13px]">{{ t.name }} <span v-if="!t.active" class="text-red-500">(revoked)</span></div>
             <div class="text-[11px] text-txt-dim">Bot: {{ t.profile_name || '—' }} · dibuat {{ fmtDateTime(t.created_at) }} · terakhir dipakai {{ t.last_used_at ? fmtDateTime(t.last_used_at) : '—' }}</div>
           </div>
-          <button v-if="t.active" class="text-xs px-2.5 py-1 rounded-lg bg-red-500/10 text-red-500 border border-red-500/40 hover:brightness-125" @click="revoke(t.id)">Revoke</button>
+          <button class="text-xs px-2.5 py-1 rounded-lg bg-red-500/10 text-red-500 border border-red-500/40 hover:brightness-125 self-start sm:self-auto" @click="del(t.id)">🗑 Hapus</button>
         </div>
       </div>
 
