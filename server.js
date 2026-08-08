@@ -92,8 +92,14 @@ function requireAuth(req, res, next) {
   // /api/stream publik (capability URL by hash — dipakai video tag dari app
   // lain seperti xbook yang tidak bisa kirim cookie/header auth)
   const pub = req.path.startsWith('/api/login') || req.path.startsWith('/s/') ||
-              req.path.startsWith('/login') || req.path.startsWith('/api/stream');
-  if (pub) return next();
+              req.path.startsWith('/login') || req.path.startsWith('/api/stream') ||
+              req.path.startsWith('/api/me');
+  // file statis (html/css/js/img/font) publik — tidak ada data sensitif
+  const ext = path.extname(req.path).toLowerCase();
+  const isStatic = req.method === 'GET' &&
+    ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
+     '.woff', '.woff2', '.ttf', '.eot', '.map'].includes(ext);
+  if (pub || isStatic) return next();
   if (getSessionUser(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   return res.redirect('/login.html');
