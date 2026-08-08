@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tas · Login</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+                padding: 34px 30px; width: 100%; max-width: 340px; }
+  .login-card .logo { font-size: 24px; text-align: center; margin-bottom: 6px; }
+  .login-card .sub { text-align: center; color: var(--text-dim); font-size: 13px; margin-bottom: 22px; }
+  .login-card input { width: 100%; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
+                      background: var(--bg-2); color: var(--text); font-size: 14px; outline: none;
+                      margin-bottom: 12px; box-sizing: border-box; }
+  .login-card input:focus { border-color: var(--accent); }
+  .login-card button { width: 100%; padding: 12px; border: none; border-radius: 10px; cursor: pointer;
+                       background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+                       font-size: 14px; font-weight: 600; }
+  .login-card button:disabled { opacity: .5; }
+  .err { color: #e74c3c; font-size: 12px; text-align: center; min-height: 18px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo"><span class="logo-mark">✦</span> tas</div>
+  <div class="sub">Telegram as Storage — masuk untuk melanjutkan</div>
+  <div class="err" id="err"></div>
+  <input type="text" id="username" placeholder="Username" autocomplete="username">
+  <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+  <button id="login-btn">🔐 Masuk</button>
+</div>
+<script src="/login.js"></script>
+</body>
+</html>

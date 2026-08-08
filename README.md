@@ -5,60 +5,72 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 
 ## ✨ Fitur
 
-- **Upload / Download / Delete** file via web UI (drag & drop)
-- **Streaming video** — HTTP Range support (seek/jump), cache di disk
-- **JSON API** dengan CORS — siap diintegrasikan aplikasi lain (mis. xbook-web)
+- **🔐 Auth** — login password (SQLite: users + sessions), API token untuk integrasi
+- **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL
+- **▶️ Preview in-browser** — video player & gambar (streaming HTTP Range, seek-able)
+- **🔗 Share link** — link kadaluarsa + batas download (publik tanpa login)
+- **🗜️ Download ZIP** — pilih banyak file → download jadi satu archive
+- **📊 Dashboard** — stats storage, breakdown tipe file, aktivitas, share aktif
+- **🔁 Retry upload** — job gagal bisa diulang
+- **🗑 Delete hard** — hapus dari index + chat Telegram
 - **Anonim di bot** — caption chunk tidak membocorkan nama asli file
-- CLI TAS didukung penuh: list, status, pull, delete (hard)
 
 ## 🏗️ Arsitektur
 
 ```
 node:20-slim container
 ├── @nightowne/tas-cli (global) + patch caption anonim
-├── server.js  → Express wrapper (subprocess `tas`)
-└── public/    → frontend design system xbook
+├── server.js  → Express (auth SQLite, API, streaming, share, zip)
+└── public/    → frontend design system xbook (login + app)
 ```
 
 ## 🚀 Deploy
 
 ```bash
-cp .env.example .env   # isi TAS_PASSWORD (password enkripsi TAS)
+cp .env.example .env   # isi TAS_PASSWORD + AUTH_PASSWORD + API_TOKEN
 docker compose up -d --build
 
-# init sekali (interaktif — butuh bot token dari @BotFather,
+# init TAS sekali (interaktif — butuh bot token dari @BotFather,
 # lalu kirim pesan apa saja ke bot):
 docker exec -it tas-web tas init
 ```
 
+## 🔑 Konfigurasi (`.env`)
+
+| Variable | Fungsi |
+|----------|--------|
+| `TAS_PASSWORD` | Password enkripsi TAS (wajib) |
+| `AUTH_USER` / `AUTH_PASSWORD` | Login web (kosongkan = mode publik) |
+| `API_TOKEN` | Token statis untuk integrasi API (`Authorization: Bearer`) |
+
 ## 📡 API
 
-| Endpoint | Fungsi |
-|----------|--------|
-| `GET /api/status` | Status TAS (initialized, user, jumlah file) |
-| `GET /api/files` | Daftar file (JSON) |
-| `POST /api/upload` | Upload file (multipart `file`) → `jobId` |
-| `GET /api/jobs` | Status job upload |
-| `GET /api/download/:id` | Download file (by hash/nama) |
-| `GET /api/stream/:id` | **Stream video** dengan Range support |
-| `POST /api/delete/:id` | Hapus file (hard — termasuk dari Telegram) |
-| `GET /api/cache` · `POST /api/cache/clear` | Kelola cache streaming |
+| Endpoint | Auth | Fungsi |
+|----------|------|--------|
+| `POST /api/login` · `POST /api/logout` · `GET /api/me` | – | Auth |
+| `GET /api/status` · `GET /api/files` | ✅ | Status & daftar file |
+| `POST /api/upload` (multi) · `POST /api/upload-url` | ✅ | Upload file / dari URL |
+| `POST /api/upload/retry/:jobId` · `GET /api/jobs` | ✅ | Job upload |
+| `GET /api/download/:id` | ✅ | Download file |
+| `GET /api/stream/:id` | **publik** | Stream (capability URL by hash) |
+| `POST /api/delete/:id` | ✅ | Hapus hard |
+| `POST /api/share/:id` · `GET /s/:token` · `POST /api/share/revoke/:token` | ✅/publik | Share link |
+| `POST /api/zip` | ✅ | Download ZIP multi-file |
+| `GET /api/stats` · `GET /api/activity` · `GET /api/shares` | ✅ | Dashboard |
+| `GET /api/cache` · `POST /api/cache/clear` | ✅ | Cache streaming |
 
-## 🔌 Integrasi xbook-web
+## 🔌 Integrasi dengan aplikasi lain (mis. xbook-web)
 
-xbook-web bisa menyimpan hasil download ke TAS (opsional via halaman settings)
-dan streaming video lewat `GET /api/stream/:id`:
-
-```
-http://<host>:<port>/api/stream/<HASH>   ← dipakai <video src>
-```
+Kirim header `Authorization: Bearer <API_TOKEN>` pada semua panggilan API
+(kecuali `/api/stream` & `/s/*` yang publik). Streaming video:
+`GET /api/stream/<HASH>` — mendukung HTTP Range (seek).
 
 ## 🛡️ Keamanan
 
 - File terenkripsi **AES-256-GCM** sebelum dikirim ke Telegram (zero-knowledge)
-- Password enkripsi via env `TAS_PASSWORD` (jangan commit!)
-- Nama asli file **tidak** muncul di chat bot (caption = hash saja)
-- `data/` (config + index SQLite) jangan pernah di-commit (sudah di `.gitignore`)
+- Password di-hash dengan **scrypt** (SQLite, WAL mode)
+- Nama asli file **tidak** muncul di chat bot
+- `data/` (config + SQLite) jangan pernah di-commit (sudah di `.gitignore`)
 
 ## 📄 Lisensi
 

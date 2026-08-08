@@ -217,6 +217,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 }
 .modal-meta .handle { color: var(--text); font-weight: 600; }
 .modal-meta a { color: var(--accent-2); text-decoration: none; }
+.actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
 
 .modal-x {
   position: absolute;

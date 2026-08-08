@@ -9,6 +9,9 @@ services:
       - ./data:/data
     environment:
       - TAS_PASSWORD=${TAS_PASSWORD:-}
+      - AUTH_USER=${AUTH_USER:-admin}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - API_TOKEN=${API_TOKEN:-}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
     networks:
       - xbook-net
