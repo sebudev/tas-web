@@ -219,6 +219,27 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 .modal-meta a { color: var(--accent-2); text-decoration: none; }
 .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
 
+/* ================= Light mode ================= */
+[data-theme="light"] {
+  --bg: #f2f2f7;
+  --bg-2: #ffffff;
+  --card: #ffffff;
+  --border: #e3e3ee;
+  --text: #191924;
+  --text-dim: #5f5f75;
+  --accent: #5b4cf0;
+  --accent-2: #0094c2;
+}
+[data-theme="light"] body { background: var(--bg); }
+[data-theme="light"] .card-info .text { color: rgba(0,0,0,.6); }
+[data-theme="light"] .dropzone:hover, [data-theme="light"] .dropzone.over { background: rgba(0,0,0,.03); }
+[data-theme="light"] .tag { background: rgba(0,0,0,.05); color: var(--text-dim); }
+[data-theme="light"] .setup-box code { background: rgba(0,0,0,.06); }
+[data-theme="light"] .chip { background: var(--bg-2); }
+[data-theme="light"] .job-line.done { color: #1a9c50; }
+[data-theme="light"] .toast { background: var(--card); }
+[data-theme="light"] .sel-box { background: rgba(255,255,255,.85); }
+
 .modal-x {
   position: absolute;
   top: 18px; right: 18px;

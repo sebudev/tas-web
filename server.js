@@ -11,6 +11,9 @@ const path = require('path');
 const crypto = require('crypto');
 const archiver = require('archiver');
 const Database = require('better-sqlite3');
+const { AsyncLocalStorage } = require('async_hooks');
+
+const als = new AsyncLocalStorage(); // konteks per-request (profile dari API token)
 
 const PORT = process.env.PORT || 8001;
 const TAS_PASSWORD = process.env.TAS_PASSWORD || '';
@@ -87,8 +90,13 @@ function getSessionUser(req) {
                      WHERE s.token=? AND s.expires_at > ?`).get(token, Date.now()) || null;
 }
 
+app.use((req, res, next) => {
+  als.run(resolveAuth(req), () => next());
+});
+
 function requireAuth(req, res, next) {
   if (!authEnabled) return next();
+  const ctx = als.getStore() || {};
   // /api/stream publik (capability URL by hash — dipakai video tag dari app
   // lain seperti xbook yang tidak bisa kirim cookie/header auth)
   const pub = req.path.startsWith('/api/login') || req.path.startsWith('/s/') ||
@@ -100,11 +108,28 @@ function requireAuth(req, res, next) {
     ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
      '.woff', '.woff2', '.ttf', '.eot', '.map'].includes(ext);
   if (pub || isStatic) return next();
-  if (getSessionUser(req)) return next();
+  if (ctx.user) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   return res.redirect('/login.html');
 }
 app.use(requireAuth);
+
+// resolve auth → konteks ALS: token API per-bot mengikat request ke profile-nya
+function resolveAuth(req) {
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer ')) {
+    const tok = auth.slice(7);
+    const row = db.prepare('SELECT * FROM api_tokens WHERE token=? AND active=1').get(tok);
+    if (row) {
+      const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(row.profile_id);
+      if (prof) {
+        try { db.prepare('UPDATE api_tokens SET last_used_at=? WHERE id=?').run(Date.now(), row.id); } catch {}
+        return { profile: prof, user: { user_id: 0, username: 'api:' + (row.name || 'bot') } };
+      }
+    }
+  }
+  return { profile: null, user: getSessionUser(req) };
+}
 
 // ---------------- multi-bot profiles ----------------
 db.exec(`CREATE TABLE IF NOT EXISTS profiles (
@@ -143,9 +168,12 @@ function setActiveProfile(id) {
   activeProfile = db.prepare('SELECT * FROM profiles WHERE id=?').get(id);
 }
 
-function tasEnv(profile = activeProfile) {
-  if (!profile) return { ...process.env, TAS_PASSWORD, TAS_DATA_DIR };
-  return { ...process.env, TAS_PASSWORD: profile.password || '', TAS_DATA_DIR: profile.data_dir };
+function tasEnv(profile) {
+  // prioritas: profile eksplisit > konteks request (token API per-bot) > aktif global
+  const ctx = als.getStore() || {};
+  const p = profile || ctx.profile || activeProfile;
+  if (!p) return { ...process.env, TAS_PASSWORD, TAS_DATA_DIR };
+  return { ...process.env, TAS_PASSWORD: p.password || '', TAS_DATA_DIR: p.data_dir };
 }
 
 function toProfile(p) {
@@ -336,7 +364,44 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', (req, res) => res.json(getSessionUser(req)));
+app.get('/api/me', (req, res) => {
+  const ctx = als.getStore() || {};
+  res.json(ctx.user || null);
+});
+
+// ---------------- API tokens (per-bot, utk integrasi) ----------------
+db.exec(`CREATE TABLE IF NOT EXISTS api_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT UNIQUE,
+  profile_id INTEGER,
+  name TEXT DEFAULT '',
+  active INTEGER DEFAULT 1,
+  created_at INTEGER,
+  last_used_at INTEGER
+)`);
+
+app.get('/api/tokens', (req, res) => {
+  const rows = db.prepare(`SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at
+    FROM api_tokens t LEFT JOIN profiles p ON p.id=t.profile_id ORDER BY t.id DESC`).all();
+  res.json({ tokens: rows.map((r) => ({ ...r, token: r.token.slice(0, 8) + '…' })) });
+});
+
+app.post('/api/tokens', (req, res) => {
+  const profileId = parseInt(req.body?.profileId, 10);
+  const name = (req.body?.name || '').trim().slice(0, 60) || 'Token';
+  const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(profileId);
+  if (!prof) return res.status(400).json({ error: 'Profile bot tidak ditemukan' });
+  const token = 'tas_' + crypto.randomBytes(24).toString('hex');
+  db.prepare('INSERT INTO api_tokens (token, profile_id, name, created_at) VALUES (?,?,?,?)')
+    .run(token, profileId, name, Date.now());
+  logActivity('token', 'create "' + name + '" utk ' + prof.name);
+  res.json({ token, name, profileId, profileName: prof.name });
+});
+
+app.delete('/api/tokens/:id', (req, res) => {
+  db.prepare('UPDATE api_tokens SET active=0 WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
 
 // ---------------- storage API ----------------
 app.get('/api/status', async (req, res) => {

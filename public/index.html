@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>tas · Telegram Storage</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem('tasTheme') || 'dark';</script>
 <link rel="stylesheet" href="/style.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -86,6 +87,8 @@
   <select id="bot-select" class="sort-select" title="Switch storage bot"></select>
   <button class="btn ghost small" id="add-bot-btn" title="Tambah bot">➕</button>
   <button class="btn ghost small hidden" id="bot-del-btn" title="Hapus bot">🗑</button>
+  <a class="btn ghost small" href="/api.html" title="API tokens per bot">🔑</a>
+  <button class="btn ghost small" id="theme-btn" title="Ganti tema">☀️</button>
   <button class="btn ghost small" id="dash-btn" title="Dashboard">📊</button>
   <div class="stats">
     <span id="stat-files">0</span> file

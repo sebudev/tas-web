@@ -488,6 +488,18 @@ dz.addEventListener('drop', (e) => {
   if (e.dataTransfer.files.length) enqueueUploads([...e.dataTransfer.files]);
 });
 
+// ---------------- theme toggle ----------------
+function applyThemeBtn() {
+  const th = document.documentElement.dataset.theme;
+  $('#theme-btn').textContent = th === 'light' ? '🌙' : '☀️';
+}
+$('#theme-btn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('tasTheme', next);
+  applyThemeBtn();
+});
+
 // ---------------- multi-bot (switch storage bot) ----------------
 let profiles = [];
 
