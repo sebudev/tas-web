@@ -45,7 +45,7 @@
   position: absolute; top: 18px; right: 18px; width: 40px; height: 40px;
   border-radius: 50%; border: 1px solid var(--border);
   background: rgba(0,0,0,.5); color: var(--text); font-size: 16px;
-  cursor: pointer; z-index: 10; transition: background .2s;
+  cursor: pointer; z-index: 95; transition: background .2s;
 }
 .modal-x:hover { background: rgba(124,108,255,.3); }
 [data-theme='light'] .modal-x { background: rgba(0,0,0,.1); }
@@ -54,7 +54,7 @@
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 48px; height: 48px; border-radius: 50%;
   border: 1px solid var(--border); background: rgba(0,0,0,.5); color: #fff;
-  font-size: 26px; cursor: pointer; z-index: 10; transition: background .2s;
+  font-size: 26px; cursor: pointer; z-index: 95; transition: background .2s;
 }
 .nav:hover { background: rgba(124,108,255,.3); }
 .nav.prev { left: 14px; }

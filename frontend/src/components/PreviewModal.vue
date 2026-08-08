@@ -52,7 +52,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
   <div v-if="file" class="fixed inset-0 z-[100]" @keydown="onKey" tabindex="-1">
     <div class="modal-backdrop" @click="close"></div>
 
-    <div class="absolute inset-0 flex items-center justify-center flex-col p-2 sm:p-5 pointer-events-none">
+    <div class="absolute inset-0 z-[100] flex items-center justify-center flex-col p-2 sm:p-5 pointer-events-none">
       <button class="nav prev" @click="nav(-1)">‹</button>
 
       <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">

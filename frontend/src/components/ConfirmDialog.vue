@@ -5,7 +5,7 @@ import { confirmState, resolveConfirm } from '../composables/useConfirm';
 <template>
   <div v-if="confirmState.show" class="fixed inset-0 z-[150]">
     <div class="modal-backdrop" @click="resolveConfirm(false)"></div>
-    <div class="fixed inset-0 flex items-center justify-center p-5 pointer-events-none">
+    <div class="fixed inset-0 z-[100] flex items-center justify-center p-5 pointer-events-none">
       <div class="pointer-events-auto w-full max-w-[360px] bg-card border border-line rounded-xl2 p-5 shadow-2xl">
         <h3 class="text-[15px] mb-2 flex items-center gap-2">
           <span class="text-amber-400">⚠️</span> {{ confirmState.title }}
