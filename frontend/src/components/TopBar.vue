@@ -7,6 +7,7 @@ import { loadProfiles, loadApps, switchApp, selectBot, deleteProfile, currentApp
 import { apiPost } from '../composables/useApi';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import { promptDialog } from '../composables/usePrompt';
 import BotDialog from './BotDialog.vue';
 import AppDialog from './AppDialog.vue';
 import DashboardModal from './DashboardModal.vue';
@@ -36,9 +37,13 @@ function onSelectBot(e) {
 }
 
 async function onNewApp() {
-  const name = prompt('Nama app baru:');
-  if (!name || !name.trim()) return;
-  try { await createApp(name.trim()); toast('📦 App "' + name.trim() + '" dibuat', 'ok'); }
+  const name = await promptDialog({
+    title: '📦 App baru',
+    placeholder: 'Nama app (mis. Produk A)',
+    okText: 'Buat',
+  });
+  if (!name) return;
+  try { await createApp(name); toast('📦 App "' + name + '" dibuat', 'ok'); }
   catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 

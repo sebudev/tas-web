@@ -4,6 +4,7 @@ import { store } from '../store';
 import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import { promptDialog } from '../composables/usePrompt';
 
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
@@ -21,7 +22,12 @@ function toggleView() {
 }
 
 async function onUrl() {
-  const url = prompt('URL file yang mau di-upload (server yang download):');
+  const url = await promptDialog({
+    title: '🔗 Upload dari URL',
+    message: 'Server yang akan mendownload filenya (bukan browser kamu).',
+    placeholder: 'https://...',
+    okText: '⬇ Download',
+  });
   if (url) await uploadUrl(url);
 }
 
