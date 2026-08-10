@@ -225,6 +225,7 @@ app.post('/api/profiles/:id/init', (req, res) => {
   if (existing && existing.status === 'running') return res.status(400).json({ error: 'Init sedang berjalan' });
 
   db.prepare('UPDATE profiles SET password=? WHERE id=?').run(password, p.id);
+  stopBotIngest(p.id); // jeda polling bot ini dulu (tas init pakai getUpdates utk waitForChatId)
   const job = { status: 'running', message: 'Menghubungkan ke Telegram...', botUsername: '' };
   initJobs.set(p.id, job);
   logActivity('profile', 'init ' + p.name);
@@ -252,6 +253,7 @@ app.post('/api/profiles/:id/init', (req, res) => {
       db.prepare('UPDATE profiles SET initialized=1, bot_username=? WHERE id=?').run(job.botUsername, p.id);
       job.status = 'done';
       job.message = 'Tersambung ke @' + job.botUsername;
+      startBotIngest(); // bot baru siap → aktifkan polling kalau profile ini aktif
     } else {
       job.status = 'error';
       job.message = out.slice(-220) || ('exit ' + code);
@@ -267,6 +269,7 @@ app.post('/api/profiles/:id/switch', (req, res) => {
   if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
   setActiveProfile(p.id);
   logActivity('profile', 'switch → ' + p.name);
+  startBotIngest(); // polling bot ikut pindah ke profile baru
   res.json({ ok: true, active: toProfile(p) });
 });
 
@@ -275,6 +278,7 @@ app.delete('/api/profiles/:id', (req, res) => {
   if (!p) return res.status(404).json({ error: 'Profile tidak ditemukan' });
   const c = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
   if (c <= 1) return res.status(400).json({ error: 'Tidak bisa hapus profile terakhir' });
+  stopBotIngest(p.id); // berhenti polling bot profile yang dihapus
   db.prepare('DELETE FROM profiles WHERE id=?').run(p.id);
   if (p.is_active) {
     const next = db.prepare('SELECT * FROM profiles ORDER BY id LIMIT 1').get();
@@ -325,8 +329,9 @@ function finishJob(job, err, message) {
   job.message = err ? (err.message || String(err)) : (message || 'Selesai');
 }
 
-function pushJob(job, filePath, name) {
-  const child = spawn('tas', ['push', filePath, '--name', name], { env: tasEnv() });
+function pushJob(job, filePath, name, folderId, onDone, profile) {
+  if (folderId) job.folderId = folderId;
+  const child = spawn('tas', ['push', filePath, '--name', name], { env: tasEnv(profile) });
   let outTail = '';
   child.stdout.on('data', (d) => { outTail = (outTail + d).slice(-800); });
   child.stderr.on('data', (d) => { outTail = (outTail + d).slice(-800); });
@@ -335,12 +340,239 @@ function pushJob(job, filePath, name) {
     if (code === 0) {
       try { fs.unlinkSync(filePath); } catch {}
       job.tmpPath = null;
+      const m = outTail.match(/Hash:\s*([A-Za-z0-9]+)/);
+      if (m) job.hash = m[1];
+      // auto-masuk folder kalau upload dimulai dari dalam folder
+      if (job.folderId && job.hash) {
+        if (db.prepare('SELECT id FROM folders WHERE id=?').get(job.folderId)) {
+          db.prepare('INSERT OR REPLACE INTO folder_files (folder_id, file_hash, added_at) VALUES (?,?,?)')
+            .run(job.folderId, job.hash, Date.now());
+        }
+      }
       logActivity('upload', name);
       finishJob(job, null, `Upload selesai: ${name}`);
     } else {
       job.tmpPath = filePath; // simpan utk retry
       finishJob(job, new Error(`tas push gagal (exit ${code}): ${outTail.slice(-300)}`));
     }
+    if (onDone) onDone(job);
+  });
+}
+
+// ---------------- bot ingest: upload via Telegram bot ----------------
+// User kirim file ke bot → bot download → tas push (chunk terenkripsi masuk
+// chat) → pesan asli user dihapus → file muncul di list web.
+const BOT_INGEST = process.env.BOT_INGEST !== '0';
+const BOT_INGEST_MAX = 20 * 1024 * 1024; // Bot API getFile limit 20MB
+const BOT_API = 'https://api.telegram.org';
+
+function fmtBytes(b) {
+  if (b == null || isNaN(b)) return '0 B';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+
+// jejak pesan konfirmasi ✅ di chat — dihapus bareng file-nya saat delete dari web
+db.exec(`CREATE TABLE IF NOT EXISTS ingest_confirmations (
+  file_hash TEXT,
+  profile_id INTEGER,
+  chat_id INTEGER,
+  msg_id INTEGER,
+  created_at INTEGER
+)`);
+
+// dekripsi encryptedBotToken (AES-256-GCM + PBKDF2-600k, format tas-cli v2)
+function decryptBotToken(profile) {
+  if (process.env.TAS_BOT_TOKEN) return process.env.TAS_BOT_TOKEN; // override manual
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(profile.data_dir, 'config.json'), 'utf8'));
+    if (cfg.botToken) return cfg.botToken; // config v1 (plaintext)
+    if (cfg.encryptedBotToken && profile.password) {
+      const b = Buffer.from(cfg.encryptedBotToken, 'base64');
+      const salt = b.subarray(0, 32), iv = b.subarray(32, 44);
+      const tag = b.subarray(-16), ct = b.subarray(44, -16);
+      const key = crypto.pbkdf2Sync(profile.password, salt, 600000, 32, 'sha512');
+      const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      d.setAuthTag(tag);
+      return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+    }
+  } catch (e) { console.log('⚠️ decryptBotToken gagal:', e.message); }
+  return null;
+}
+
+async function tgApi(token, method, params = {}, timeoutMs = 70000) {
+  const res = await fetch(`${BOT_API}/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) throw new Error(`TG ${method}: ${data.description || ('HTTP ' + res.status)}`);
+  return data.result;
+}
+
+const botPolls = new Map(); // profileId -> { token, botId, offset, processed:Set, stopped }
+
+// stopBotIngest(profileId?) — tanpa arg = stop SEMUA; dgn arg = stop satu profile
+function stopBotIngest(profileId) {
+  if (profileId) {
+    const p = botPolls.get(profileId);
+    if (p) { p.stopped = true; botPolls.delete(profileId); }
+    return;
+  }
+  for (const p of botPolls.values()) p.stopped = true;
+  botPolls.clear();
+}
+
+// aktifkan polling utk SEMUA profile yang sudah initialized — tiap bot
+// meng-ingest file ke storage profile-nya masing-masing
+async function startBotIngest() {
+  if (!BOT_INGEST) return;
+  const profs = db.prepare('SELECT * FROM profiles WHERE initialized=1').all();
+  for (const prof of profs) {
+    if (botPolls.has(prof.id)) continue; // sudah polling
+    const token = decryptBotToken(prof);
+    if (!token) {
+      console.log(`📥 Bot ingest: token bot tidak ditemukan utk profile "${prof.name}"`);
+      continue;
+    }
+    try {
+      const me = await tgApi(token, 'getMe', {}, 15000);
+      const p = { token, botId: me.id, profileId: prof.id, offset: 0, processed: new Set(), stopped: false };
+      botPolls.set(prof.id, p);
+      // sinkronisasi offset ke update terbaru → pesan lama tidak diproses ulang
+      try {
+        const last = await tgApi(token, 'getUpdates', { offset: -1, timeout: 1 });
+        if (last.length) p.offset = last[last.length - 1].update_id + 1;
+      } catch {}
+      console.log(`📥 Bot ingest aktif: @${me.username} → profile "${prof.name}" (file ≤20MB, pesan asli dihapus setelah tersimpan)`);
+      pollLoop(prof.id);
+    } catch (e) {
+      console.log(`⚠️ Bot ingest "${prof.name}": getMe gagal — ` + e.message.slice(0, 120));
+    }
+  }
+}
+
+async function pollLoop(profileId) {
+  const p = botPolls.get(profileId);
+  if (!p || p.stopped) return;
+  try {
+    const updates = await tgApi(p.token, 'getUpdates', {
+      offset: p.offset, timeout: 50, allowed_updates: ['message'],
+    });
+    for (const u of updates) {
+      p.offset = u.update_id + 1;
+      if (u.message) {
+        try { await handleIncomingMessage(p, u.message); }
+        catch (e) { console.log('⚠️ handle pesan gagal:', e.message.slice(0, 150)); }
+      }
+    }
+  } catch (e) {
+    // timeout long-poll = normal; error lain → jeda sebentar
+    if (!/timed? ?out|abort|fetch failed/i.test(e.message)) {
+      console.log('⚠️ poll loop:', e.message.slice(0, 120));
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  if (botPolls.get(profileId) === p) setTimeout(() => pollLoop(profileId), 250);
+}
+
+// pilih file dari pesan (document/video/photo/audio/voice/video_note/animation)
+function pickFile(msg) {
+  if (msg.document) return { fileId: msg.document.file_id, fileName: msg.document.file_name || 'document.bin', fileSize: msg.document.file_size };
+  if (msg.video) return { fileId: msg.video.file_id, fileName: msg.video.file_name || 'video.mp4', fileSize: msg.video.file_size };
+  if (msg.photo && msg.photo.length) { const ph = msg.photo[msg.photo.length - 1]; return { fileId: ph.file_id, fileName: null, fileSize: ph.file_size }; }
+  if (msg.audio) return { fileId: msg.audio.file_id, fileName: msg.audio.file_name || 'audio.mp3', fileSize: msg.audio.file_size };
+  if (msg.voice) return { fileId: msg.voice.file_id, fileName: null, fileSize: msg.voice.file_size };
+  if (msg.video_note) return { fileId: msg.video_note.file_id, fileName: null, fileSize: msg.video_note.file_size };
+  if (msg.animation) return { fileId: msg.animation.file_id, fileName: msg.animation.file_name || 'animation.gif', fileSize: msg.animation.file_size };
+  return null;
+}
+
+function fallbackName(msg) {
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  if (msg.photo) return `photo_${ts}.jpg`;
+  if (msg.voice) return `voice_${ts}.ogg`;
+  if (msg.video_note) return `video_note_${ts}.mp4`;
+  if (msg.animation) return `animation_${ts}.gif`;
+  return `file_${ts}.bin`;
+}
+
+async function tgReply(p, chatId, text) {
+  try {
+    const r = await tgApi(p.token, 'sendMessage', { chat_id: chatId, text }, 15000);
+    return r ? r.message_id : null;
+  } catch { return null; }
+}
+
+async function deleteOriginal(p, chatId, msgId) {
+  try {
+    await tgApi(p.token, 'deleteMessage', { chat_id: chatId, message_id: msgId }, 15000);
+  } catch (e) {
+    console.log('⚠️ hapus pesan asli gagal:', e.message.slice(0, 100));
+  }
+}
+
+async function handleIncomingMessage(p, msg) {
+  if (!msg || msg.from?.id === p.botId) return; // pesan bot sendiri (chunk terenkripsi) → skip
+  const chatId = msg.chat?.id;
+  const msgId = msg.message_id;
+  if (chatId == null || msgId == null) return;
+  if (p.processed.has(msgId)) return;
+  p.processed.add(msgId);
+  if (p.processed.size > 2000) p.processed.clear();
+
+  const file = pickFile(msg);
+  if (!file) return; // teks/stiker/dll → abaikan
+
+  const name = (file.fileName || fallbackName(msg)).replace(/[^\w.\-() ]+/g, '_').slice(0, 180);
+  const size = file.fileSize || 0;
+  if (size > BOT_INGEST_MAX) {
+    await tgReply(p, chatId, `⚠️ "${name}" (${fmtBytes(size)}) melebihi limit 20MB Bot API — upload lewat web saja.`);
+    return; // pesan asli TIDAK dihapus
+  }
+
+  // download file dari Telegram
+  let filePath = null;
+  try {
+    const f = await tgApi(p.token, 'getFile', { file_id: file.fileId });
+    if (!f.file_path) throw new Error('file_path kosong');
+    const ext = path.extname(name) || '';
+    filePath = path.join(TMP_DIR, `bot-${Date.now()}-${crypto.randomBytes(3).toString('hex')}${ext}`);
+    const r = await fetch(`${BOT_API}/file/bot${p.token}/${f.file_path}`, { signal: AbortSignal.timeout(180000) });
+    if (!r.ok) throw new Error('download HTTP ' + r.status);
+    fs.writeFileSync(filePath, Buffer.from(await r.arrayBuffer()));
+  } catch (e) {
+    await tgReply(p, chatId, `⚠️ Gagal ambil file "${name}": ${e.message.slice(0, 150)}`);
+    return;
+  }
+
+  // push ke storage profile bot ini — chunk terenkripsi otomatis dikirim balik
+  // ke chat oleh tas (jangan lupa profile eksplisit: bukan selalu yg aktif)
+  const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(p.profileId);
+  if (!prof) return;
+  const job = createJob(name);
+  job.size = size;
+  job.message = 'Ingest dari Telegram...';
+  await new Promise((resolve) => {
+    pushJob(job, filePath, name, null, async () => {
+      if (job.status === 'done') {
+        logActivity('upload', 'bot: ' + name);
+        const sent = await tgReply(p, chatId, `✅ "${name}" (${fmtBytes(size)}) tersimpan — chunk terenkripsi ada di chat ini & terlihat di tas-web.`);
+        // jejak pesan konfirmasi → ikut terhapus saat file di-delete dari web
+        if (job.hash && sent) {
+          db.prepare('INSERT OR REPLACE INTO ingest_confirmations (file_hash, profile_id, chat_id, msg_id, created_at) VALUES (?,?,?,?,?)')
+            .run(job.hash, p.profileId, chatId, sent, Date.now());
+        }
+        deleteOriginal(p, chatId, msgId); // hapus pesan asli user
+      } else {
+        tgReply(p, chatId, `❌ Gagal simpan "${name}": ${job.message.slice(0, 200)}`);
+      }
+      resolve();
+    }, prof);
   });
 }
 
@@ -381,6 +613,127 @@ db.exec(`CREATE TABLE IF NOT EXISTS api_tokens (
   created_at INTEGER,
   last_used_at INTEGER
 )`);
+
+// ---------------- folders (virtual, model Google Drive) ----------------
+// File asli tetap di Telegram (flat). Folder = layer organisasi di SQLite:
+// folder bertingkat (parent_id), 1 file (by hash) maksimal di 1 folder.
+db.exec(`CREATE TABLE IF NOT EXISTS folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER,
+  created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS folder_files (
+  folder_id INTEGER NOT NULL,
+  file_hash TEXT PRIMARY KEY,
+  added_at INTEGER
+);`);
+
+app.get('/api/folders', (req, res) => {
+  const folders = db.prepare('SELECT * FROM folders ORDER BY name').all();
+  const counts = db.prepare('SELECT folder_id, COUNT(*) c FROM folder_files GROUP BY folder_id').all();
+  const countMap = {};
+  for (const c of counts) countMap[c.folder_id] = c.c;
+  const fileFolders = {};
+  for (const row of db.prepare('SELECT folder_id, file_hash FROM folder_files').all()) {
+    fileFolders[row.file_hash] = row.folder_id;
+  }
+  res.json({
+    folders: folders.map((f) => ({
+      id: f.id, name: f.name, parentId: f.parent_id,
+      createdAt: f.created_at, fileCount: countMap[f.id] || 0,
+    })),
+    fileFolders,
+  });
+});
+
+app.post('/api/folders', (req, res) => {
+  const name = (req.body?.name || '').trim().slice(0, 100);
+  if (!name) return res.status(400).json({ error: 'Nama folder wajib diisi' });
+  const parentId = req.body?.parentId ? parseInt(req.body.parentId, 10) : null;
+  if (parentId && !db.prepare('SELECT id FROM folders WHERE id=?').get(parentId)) {
+    return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
+  }
+  const info = db.prepare('INSERT INTO folders (name, parent_id, created_at) VALUES (?,?,?)')
+    .run(name, parentId, Date.now());
+  logActivity('folder', 'create "' + name + '"');
+  res.json({ id: info.lastInsertRowid, name, parentId, createdAt: Date.now(), fileCount: 0 });
+});
+
+app.put('/api/folders/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  const name = req.body?.name !== undefined && String(req.body.name).trim()
+    ? String(req.body.name).trim().slice(0, 100) : f.name;
+  let parentId = f.parent_id;
+  if (req.body.parentId !== undefined) {
+    parentId = req.body.parentId ? parseInt(req.body.parentId, 10) : null;
+    if (parentId === f.id) return res.status(400).json({ error: 'Folder tidak bisa jadi induk dirinya sendiri' });
+    if (parentId) {
+      // cegah siklus: telusuri rantai induk
+      let cur = parentId; const seen = new Set();
+      while (cur) {
+        if (cur === f.id) return res.status(400).json({ error: 'Terjadi siklus folder' });
+        if (seen.has(cur)) break;
+        seen.add(cur);
+        const p = db.prepare('SELECT parent_id FROM folders WHERE id=?').get(cur);
+        cur = p ? p.parent_id : null;
+      }
+      if (!db.prepare('SELECT id FROM folders WHERE id=?').get(parentId)) {
+        return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
+      }
+    }
+  }
+  db.prepare('UPDATE folders SET name=?, parent_id=? WHERE id=?').run(name, parentId, f.id);
+  logActivity('folder', 'rename "' + name + '"');
+  res.json({ id: f.id, name, parentId, createdAt: f.created_at, fileCount: db.prepare('SELECT COUNT(*) c FROM folder_files WHERE folder_id=?').get(f.id).c });
+});
+
+// alias gaya POST (konsisten dgn endpoint lain di codebase)
+app.post('/api/folders/:id/rename', (req, res) => {
+  const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  const name = (req.body?.name || '').trim().slice(0, 100);
+  if (!name) return res.status(400).json({ error: 'Nama folder wajib diisi' });
+  db.prepare('UPDATE folders SET name=? WHERE id=?').run(name, f.id);
+  logActivity('folder', 'rename "' + name + '"');
+  res.json({ id: f.id, name, parentId: f.parent_id, createdAt: f.created_at });
+});
+
+app.delete('/api/folders/:id', (req, res) => {
+  const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  db.transaction(() => {
+    // subfolder naik ke parent; file pindah ke parent (atau root kalau parent kosong)
+    db.prepare('UPDATE folders SET parent_id=? WHERE parent_id=?').run(f.parent_id, f.id);
+    if (f.parent_id) db.prepare('UPDATE folder_files SET folder_id=? WHERE folder_id=?').run(f.parent_id, f.id);
+    else db.prepare('DELETE FROM folder_files WHERE folder_id=?').run(f.id);
+    db.prepare('DELETE FROM folders WHERE id=?').run(f.id);
+  })();
+  logActivity('folder', 'delete "' + f.name + '"');
+  res.json({ ok: true });
+});
+
+// pindahkan file (by hash) ke folder; folderId null/kosong = kembali ke root
+app.post('/api/files/folder', (req, res) => {
+  const hashes = (req.body?.hashes || []).slice(0, 100).map(String).filter(Boolean);
+  if (!hashes.length) return res.status(400).json({ error: 'Pilih minimal 1 file' });
+  const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
+  if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) {
+    return res.status(400).json({ error: 'Folder tidak ditemukan' });
+  }
+  db.transaction(() => {
+    for (const h of hashes) {
+      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(h);
+      if (folderId) {
+        db.prepare('INSERT OR REPLACE INTO folder_files (folder_id, file_hash, added_at) VALUES (?,?,?)')
+          .run(folderId, h, Date.now());
+      }
+    }
+  })();
+  logActivity('folder', 'move ' + hashes.length + ' file');
+  res.json({ ok: true, count: hashes.length, folderId });
+});
 
 app.get('/api/tokens', (req, res) => {
   const rows = db.prepare(`SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at
@@ -440,10 +793,14 @@ const upload = multer({
 
 app.post('/api/upload', upload.array('files', 20), (req, res) => {
   if (!req.files || !req.files.length) return res.status(400).json({ error: 'Tidak ada file' });
+  const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
+  if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) {
+    return res.status(400).json({ error: 'Folder tidak ditemukan' });
+  }
   const jobsOut = [];
   for (const f of req.files) {
     const job = createJob(f.originalname);
-    pushJob(job, f.path, f.originalname);
+    pushJob(job, f.path, f.originalname, folderId);
     jobsOut.push({ jobId: job.id, name: f.originalname });
   }
   res.json({ jobs: jobsOut });
@@ -453,7 +810,12 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
 app.post('/api/upload-url', (req, res) => {
   const url = (req.body?.url || '').trim();
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'URL tidak valid' });
+  const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
+  if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) {
+    return res.status(400).json({ error: 'Folder tidak ditemukan' });
+  }
   const job = createJob(url.slice(0, 60));
+  if (folderId) job.folderId = folderId;
   const filePath = path.join(TMP_DIR, 'url-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'));
   (async () => {
     let ws = null;
@@ -519,6 +881,24 @@ app.post('/api/delete/:id', (req, res) => {
   child.on('close', (code) => {
     if (code === 0) {
       logActivity('delete', req.params.id.slice(0, 16));
+      // bersihkan mapping folder (id = hash karena frontend kirim f.hash)
+      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(req.params.id);
+      // hapus juga pesan konfirmasi ✅ bot-ingest di chat (kalau ada)
+      try {
+        const ctx = als.getStore() || {};
+        const prof = ctx.profile || activeProfile;
+        if (prof) {
+          const row = db.prepare('SELECT * FROM ingest_confirmations WHERE file_hash=? AND profile_id=?')
+            .get(req.params.id, prof.id);
+          if (row) {
+            db.prepare('DELETE FROM ingest_confirmations WHERE file_hash=? AND profile_id=?').run(req.params.id, prof.id);
+            const token = decryptBotToken(prof);
+            if (token) {
+              tgApi(token, 'deleteMessage', { chat_id: row.chat_id, message_id: row.msg_id }, 15000).catch(() => {});
+            }
+          }
+        }
+      } catch {}
       res.json({ ok: true });
     } else {
       res.status(500).json({ error: out.slice(-300) || `exit ${code}` });
@@ -681,4 +1061,5 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`tas-web v2 listening on :${PORT} (data: ${TAS_DATA_DIR}, auth: ${authEnabled ? 'ON' : 'OFF'})`);
+  startBotIngest(); // upload via Telegram bot (aktif utk profile yg sudah init)
 });

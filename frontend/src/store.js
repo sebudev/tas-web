@@ -23,6 +23,11 @@ export const store = reactive({
   // bots
   profiles: [],
   activeId: null,
+  // folders (virtual, model Google Drive)
+  folders: [],        // [{id,name,parentId,createdAt,fileCount}]
+  fileFolder: {},     // hash -> folderId (file di root = tidak ada entry)
+  currentFolder: null, // null = Semua File
+  expandedFolders: new Set(),
   // dashboard
   stats: null,
   activity: [],

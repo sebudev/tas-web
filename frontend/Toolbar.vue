@@ -6,7 +6,7 @@ import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
 
 const fileInput = ref(null);
-const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
+const emit = defineEmits(['select', 'preview-select', 'zip', 'delete']);
 
 const selCount = computed(() => store.selected.size);
 
@@ -56,11 +56,9 @@ function toggleSelectMode() {
     <input ref="fileInput" type="file" multiple hidden @change="onFiles" />
     <button class="btn" @click="fileInput.click()">⬆ Upload</button>
     <button class="btn-ghost" @click="onUrl">🔗 Dari URL</button>
-    <button class="btn-ghost lg:hidden" :title="'Daftar folder'" @click="emit('toggle-folders')">📁</button>
     <button class="btn-ghost" @click="loadFiles">↻</button>
     <button class="btn-ghost" :class="{ 'btn-active': store.selectMode }" @click="toggleSelectMode">☑ Pilih</button>
     <button class="btn-ghost" :disabled="selCount === 0" @click="onZip">🗜 ZIP ({{ selCount }})</button>
-    <button class="btn-ghost" :disabled="selCount === 0" @click="emit('move', [...store.selected])">📁 Pindah ({{ selCount }})</button>
     <button class="btn-danger" :disabled="selCount === 0" @click="onDeleteMulti">🗑 Hapus ({{ selCount }})</button>
     <button class="btn-ghost" :title="store.view === 'grid' ? 'Tampilan tabel' : 'Tampilan kartu'" @click="toggleView">
       {{ store.view === 'grid' ? '☰' : '⊞' }}

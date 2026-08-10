@@ -1,16 +1,18 @@
-# Sensitif — jangan pernah commit
-.env
-.env.*
-!.env.example
-data/
-*.pem
-*.key
-
-# Runtime & deps
+# deps
 node_modules/
-*.log
 frontend/node_modules/
 frontend/dist/
 
-# OS
+# env & secrets
+.env
+
+# runtime data (SQLite, storage index, uploads, cache)
+data/
+tmp/
+
+# build output frontend (dibangun ulang oleh Dockerfile)
+public/
+
+# log & os
+*.log
 .DS_Store

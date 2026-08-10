@@ -16,9 +16,55 @@ export async function loadFiles() {
   store.loading = false;
 }
 
+// ---------- folders ----------
+export async function loadFolders() {
+  try {
+    const data = await apiGet('/api/folders');
+    store.folders = data.folders || [];
+    store.fileFolder = data.fileFolders || {};
+    if (store.currentFolder && !store.folders.some((f) => f.id === store.currentFolder)) {
+      store.currentFolder = null; // folder yang dibuka sudah terhapus
+    }
+    applyFilters();
+  } catch { /* ignore */ }
+}
+
+export function folderById(id) {
+  return store.folders.find((f) => f.id === id) || null;
+}
+
+export function folderChildren(parentId) {
+  return store.folders
+    .filter((f) => (f.parentId || null) === (parentId || null))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function folderPath(id) {
+  const path = [];
+  let cur = folderById(id);
+  const seen = new Set();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    path.unshift(cur);
+    cur = folderById(cur.parentId);
+  }
+  return path;
+}
+
+export function openFolder(id) {
+  store.currentFolder = id || null;
+  store.page = 0;
+  clearSelection();
+  applyFilters();
+}
+
 export function applyFilters() {
   const q = store.search.toLowerCase();
-  const arr = store.files.filter((f) => !q || (f.filename || '').toLowerCase().includes(q));
+  let arr = store.files.filter((f) => !q || (f.filename || '').toLowerCase().includes(q));
+  // filter folder: hanya file yang ada di folder aktif (root = semua file)
+  if (store.currentFolder) {
+    arr = arr.filter((f) => store.fileFolder[f.hash] === store.currentFolder);
+  }
   if (store.sort === 'new') arr.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   else if (store.sort === 'old') arr.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
   else if (store.sort === 'name') arr.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
@@ -104,6 +150,7 @@ function uploadOne(file) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('files', file);
+    if (store.currentFolder) fd.append('folderId', store.currentFolder);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload');
     xhr.upload.onprogress = (e) => {
@@ -136,7 +183,7 @@ export async function pollJobs() {
       setTimeout(pollJobs, 2500);
     } else if (store.jobs.length) {
       const last = store.jobs[store.jobs.length - 1];
-      if (last.status === 'done') { toast(last.message, 'ok'); loadFiles(); }
+      if (last.status === 'done') { toast(last.message, 'ok'); loadFiles(); loadFolders(); }
       if (last.status === 'error') toast(last.message, 'err');
     }
   } catch { /* ignore */ }
@@ -148,7 +195,7 @@ export async function retryJob(id) {
 
 export async function uploadUrl(url) {
   try {
-    const data = await apiPost('/api/upload-url', { url });
+    const data = await apiPost('/api/upload-url', { url, folderId: store.currentFolder || null });
     toast('Download dari URL dimulai: ' + (data.name || ''), 'running');
     pollJobs();
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
@@ -166,6 +213,31 @@ export async function deleteFiles(ids) {
     await new Promise((r) => setTimeout(r, 500));
   }
   return ok;
+}
+
+// ---------- folder actions ----------
+export async function createFolder(name, parentId) {
+  const data = await apiPost('/api/folders', { name, parentId: parentId || null });
+  await loadFolders();
+  return data;
+}
+
+export async function renameFolder(id, name) {
+  await apiPost('/api/folders/' + id + '/rename', { name });
+  await loadFolders();
+}
+
+export async function deleteFolder(id) {
+  const f = folderById(id);
+  await apiDelete('/api/folders/' + id);
+  if (store.currentFolder === id) openFolder(null);
+  await loadFolders();
+  toast('📁 Folder "' + (f ? f.name : '') + '" dihapus — file tetap aman', 'ok');
+}
+
+export async function moveFiles(hashes, folderId) {
+  await apiPost('/api/files/folder', { hashes, folderId: folderId || null });
+  await Promise.all([loadFolders(), loadFiles()]);
 }
 
 export async function createShare(file, expire, maxDl) {

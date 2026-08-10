@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, escapeHtml } from '../store';
 import { showTip, hideTip } from '../composables/useTip';
+import { folderById } from '../composables/useApp';
 
 const props = defineProps({
   file: { type: Object, required: true },
@@ -12,6 +13,7 @@ const emit = defineEmits(['click']);
 
 const tags = computed(() => (props.file.tags || []).map((t) => '#' + escapeHtml(t)).join(' '));
 const name = computed(() => props.file.filename || props.file.hash);
+const folder = computed(() => (store.fileFolder[props.file.hash] ? folderById(store.fileFolder[props.file.hash]) : null));
 </script>
 
 <template>
@@ -37,6 +39,10 @@ const name = computed(() => props.file.filename || props.file.hash);
     <div class="text-[11.5px] text-txt-dim flex justify-between gap-2 flex-wrap">
       <span>{{ fmtBytes(file.original_size) }}</span>
       <span>{{ fmtDate(file.created_at) }}</span>
+    </div>
+
+    <div v-if="folder" class="flex items-center gap-1 text-[10px]">
+      <span class="bg-black/5 border border-line rounded-full px-2 py-0.5 text-txt-dim truncate max-w-full">📁 {{ folder.name }}</span>
     </div>
 
     <div v-if="tags" class="flex flex-wrap gap-1 text-[10px] text-txt-dim">

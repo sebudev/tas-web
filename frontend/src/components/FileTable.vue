@@ -1,11 +1,16 @@
 <script setup>
 import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, escapeHtml } from '../store';
-import { toggleSelect } from '../composables/useApp';
+import { toggleSelect, folderById } from '../composables/useApp';
 import { showTip, hideTip } from '../composables/useTip';
 
 defineProps({ items: { type: Array, default: () => [] } });
 const emit = defineEmits(['open']);
+
+const folderOf = (hash) => {
+  const fid = store.fileFolder[hash];
+  return fid ? folderById(fid) : null;
+};
 
 function onRowClick(f, idx, e) {
   if (e.target.type === 'checkbox') return;
@@ -31,6 +36,7 @@ function onCheck(f, e) {
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line whitespace-nowrap">✓</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">File</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Ukuran</th>
+          <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Folder</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Tanggal</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Tag</th>
         </tr>
@@ -55,6 +61,10 @@ function onCheck(f, e) {
             </div>
           </td>
           <td class="px-3.5 py-2.5 border-b border-line align-middle">{{ fmtBytes(f.original_size) }}</td>
+          <td class="px-3.5 py-2.5 border-b border-line align-middle">
+            <span v-if="folderOf(f.hash)" class="text-[11px] text-txt-dim whitespace-nowrap">📁 {{ folderOf(f.hash).name }}</span>
+            <span v-else class="text-[11px] text-txt-dim/50">—</span>
+          </td>
           <td class="px-3.5 py-2.5 border-b border-line align-middle">{{ fmtDate(f.created_at) }}</td>
           <td class="px-3.5 py-2.5 border-b border-line align-middle">
             <span v-for="t in (f.tags || [])" :key="t" class="inline-block mr-1 text-[10px] bg-black/5 border border-line rounded-full px-2 py-0.5 text-txt-dim whitespace-nowrap">#{{ t }}</span>
