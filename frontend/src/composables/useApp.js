@@ -7,7 +7,8 @@ import { toast } from './useToast';
 export async function loadFiles() {
   store.loading = true;
   try {
-    const data = await apiGet('/api/files');
+    const q = store.allBots && store.currentApp ? `?all=1&appId=${store.currentApp}` : '';
+    const data = await apiGet('/api/files' + q);
     store.files = data.files || [];
     store.page = 0;
     store.selected.clear();
@@ -19,7 +20,8 @@ export async function loadFiles() {
 // ---------- folders ----------
 export async function loadFolders() {
   try {
-    const data = await apiGet('/api/folders');
+    const q = store.currentApp ? `?appId=${store.currentApp}` : '';
+    const data = await apiGet('/api/folders' + q);
     store.folders = data.folders || [];
     store.fileFolder = data.fileFolders || {};
     if (store.currentFolder && !store.folders.some((f) => f.id === store.currentFolder)) {
@@ -113,6 +115,7 @@ export async function switchProfile(id) {
     const data = await apiPost('/api/profiles/' + id + '/switch');
     toast('Storage bot diganti: ' + data.active.name, 'ok');
     store.activeId = id;
+    store.allBots = false;
     await loadProfiles();
     await loadFiles();
     await loadStatus();
@@ -128,6 +131,86 @@ export async function deleteProfile(id) {
     await loadFiles();
     await loadStatus();
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+
+// ---------- apps (workspace: grup bot + api keys) ----------
+export function appById(id) {
+  return store.apps.find((a) => a.id === id) || null;
+}
+
+export function currentAppBots() {
+  const app = appById(store.currentApp);
+  if (!app) return [];
+  return store.profiles.filter((p) => app.bots.includes(p.id));
+}
+
+function ensureActiveBot() {
+  const bots = currentAppBots();
+  if (bots.length && !bots.some((p) => p.id === store.activeId)) {
+    store.activeId = bots[0].id;
+  }
+}
+
+export async function loadApps() {
+  try {
+    const data = await apiGet('/api/apps');
+    store.apps = data.apps || [];
+    if (!store.currentApp && store.apps.length) store.currentApp = store.apps[0].id;
+    if (store.currentApp && !store.apps.some((a) => a.id === store.currentApp)) {
+      store.currentApp = store.apps[0]?.id || null;
+    }
+    ensureActiveBot();
+  } catch { /* ignore */ }
+}
+
+export async function switchApp(id) {
+  store.currentApp = id || null;
+  store.allBots = false;
+  store.page = 0;
+  store.currentFolder = null;
+  clearSelection();
+  ensureActiveBot();
+  await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
+}
+
+// pilih bot di dalam app; 'all' = tampilkan gabungan file semua bot
+export function selectBot(id) {
+  store.allBots = id === 'all';
+  if (!store.allBots) store.activeId = id;
+  store.page = 0;
+  clearSelection();
+  loadFiles();
+}
+
+export async function createApp(name) {
+  const data = await apiPost('/api/apps', { name });
+  await loadApps();
+  await switchApp(data.id);
+  return data;
+}
+
+export async function renameApp(id, name) {
+  await apiPost('/api/apps/' + id + '/rename', { name });
+  await loadApps();
+}
+
+export async function deleteApp(id) {
+  await apiDelete('/api/apps/' + id);
+  store.currentApp = null;
+  await loadApps();
+  await switchApp(store.currentApp);
+}
+
+export async function attachBot(appId, profileId) {
+  await apiPost(`/api/apps/${appId}/bots`, { profileId });
+  await loadApps();
+}
+
+export async function detachBot(appId, profileId) {
+  await apiDelete(`/api/apps/${appId}/bots/${profileId}`);
+  await loadApps();
+  ensureActiveBot();
+  await loadFiles();
 }
 
 // ---------- uploads ----------
@@ -207,7 +290,10 @@ export async function deleteFiles(ids) {
   for (let i = 0; i < ids.length; i++) {
     toast('🗑 Menghapus ' + (i + 1) + '/' + ids.length + '...', 'running');
     try {
-      await apiPost('/api/delete/' + encodeURIComponent(ids[i]));
+      // view "Semua Bot": file bisa berasal dari bot berbeda → cari profileId-nya
+      const f = store.files.find((x) => x.hash === ids[i]);
+      const q = f && f.profileId ? `?profileId=${f.profileId}` : '';
+      await apiPost('/api/delete/' + encodeURIComponent(ids[i]) + q);
       ok++;
     } catch (e) { toast('Gagal hapus #' + (i + 1) + ': ' + e.message, 'err'); }
     await new Promise((r) => setTimeout(r, 500));
@@ -217,7 +303,7 @@ export async function deleteFiles(ids) {
 
 // ---------- folder actions ----------
 export async function createFolder(name, parentId) {
-  const data = await apiPost('/api/folders', { name, parentId: parentId || null });
+  const data = await apiPost('/api/folders', { name, parentId: parentId || null, appId: store.currentApp || null });
   await loadFolders();
   return data;
 }

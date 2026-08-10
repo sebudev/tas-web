@@ -1,9 +1,9 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { store, fmtDateTime } from '../store';
 import { apiGet, apiPost, apiDelete } from '../composables/useApi';
-import { loadProfiles, createToken } from '../composables/useApp';
+import { loadProfiles, loadApps, switchApp, currentAppBots } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
 
@@ -12,17 +12,29 @@ const tokens = ref([]);
 const tokName = ref('');
 const newToken = ref('');
 const copiedId = ref(null);
+const botTarget = ref(null);
+
+const appBots = computed(() => currentAppBots());
+const selApp = computed(() => store.apps.find((a) => a.id === store.currentApp));
 
 async function loadTokens() {
   try {
-    const data = await apiGet('/api/tokens');
+    const q = store.currentApp ? `?appId=${store.currentApp}` : '';
+    const data = await apiGet('/api/tokens' + q);
     tokens.value = data.tokens || [];
   } catch { /* ignore */ }
 }
 
+async function onSwitchApp(e) {
+  if (e.target.value) {
+    await switchApp(Number(e.target.value));
+    botTarget.value = null;
+    loadTokens();
+  }
+}
+
 async function copyText(text) {
   // clipboard API hanya jalan di secure context (https/localhost)
-  // fallback: textarea + execCommand (jalan juga di http)
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -42,10 +54,14 @@ async function copyText(text) {
 }
 
 async function create() {
-  const profileId = store.activeId;
-  if (!profileId) return toast('Pilih bot dulu', 'err');
+  const profileId = botTarget.value;
+  if (!profileId) return toast('Pilih bot target dulu', 'err');
   try {
-    const data = await createToken(profileId, tokName.value);
+    const data = await apiPost('/api/tokens', {
+      appId: store.currentApp || null,
+      profileId,
+      name: tokName.value,
+    });
     newToken.value = data.token;
     await copyText(data.token);
     toast('Token dibuat & disalin!', 'ok');
@@ -77,7 +93,9 @@ async function del(id) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadProfiles(), loadTokens()]);
+  await Promise.all([loadProfiles(), loadApps()]);
+  if (!botTarget.value && appBots.value.length) botTarget.value = appBots.value[0].id;
+  loadTokens();
 });
 </script>
 
@@ -90,8 +108,11 @@ onMounted(async () => {
 
     <main class="px-3 md:px-6 py-5 max-w-[1600px] mx-auto">
       <div class="flex flex-wrap items-center gap-2 my-4">
-        <select v-model="store.activeId" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none">
-          <option v-for="p in store.profiles" :key="p.id" :value="p.id">
+        <select :value="store.currentApp" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none" @change="onSwitchApp">
+          <option v-for="a in store.apps" :key="a.id" :value="a.id">📦 {{ a.name }} ({{ a.botCount || 0 }})</option>
+        </select>
+        <select v-model="botTarget" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none">
+          <option v-for="p in appBots" :key="p.id" :value="p.id">
             {{ p.initialized ? '🤖' : '📦' }} {{ p.name }}{{ p.botUsername ? ' (@' + p.botUsername + ')' : '' }}
           </option>
         </select>
@@ -104,8 +125,8 @@ onMounted(async () => {
       </div>
 
       <div class="bg-card border border-line rounded-xl2 p-4 mt-3.5">
-        <h3 class="text-sm mb-3">🔑 API tokens per bot</h3>
-        <div v-if="!tokens.length" class="text-txt-dim text-[13px] py-2">Belum ada API token. Buat di atas 👆</div>
+        <h3 class="text-sm mb-3">🔑 API keys — app: <b>{{ selApp?.name || '—' }}</b></h3>
+        <div v-if="!tokens.length" class="text-txt-dim text-[13px] py-2">Belum ada API key di app ini. Buat di atas 👆</div>
         <div v-for="t in tokens" :key="t.id" class="py-2.5 border-b border-line last:border-0 flex flex-col sm:flex-row sm:items-center gap-2">
           <button
             @click="copyToken(t)"
@@ -117,7 +138,7 @@ onMounted(async () => {
           </button>
           <div class="flex-1 min-w-0">
             <div class="font-semibold text-[13px]">{{ t.name }} <span v-if="!t.active" class="text-red-500">(revoked)</span></div>
-            <div class="text-[11px] text-txt-dim">Bot: {{ t.profile_name || '—' }} · dibuat {{ fmtDateTime(t.created_at) }} · terakhir dipakai {{ t.last_used_at ? fmtDateTime(t.last_used_at) : '—' }}</div>
+            <div class="text-[11px] text-txt-dim">Bot: {{ t.profile_name || '—' }} · App: {{ t.app_name || '—' }} · dibuat {{ fmtDateTime(t.created_at) }} · terakhir dipakai {{ t.last_used_at ? fmtDateTime(t.last_used_at) : '—' }}</div>
           </div>
           <button class="text-xs px-2.5 py-1 rounded-lg bg-red-500/10 text-red-500 border border-red-500/40 hover:brightness-125 self-start sm:self-auto" @click="del(t.id)">🗑 Hapus</button>
         </div>
@@ -126,8 +147,8 @@ onMounted(async () => {
       <div class="bg-bg-2 border border-line rounded-[10px] p-3.5 text-xs text-txt-dim leading-relaxed mt-3.5">
         <b>📌 Cara pakai untuk integrasi:</b><br>
         Kirim header <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">Authorization: Bearer &lt;token&gt;</code> pada request API.<br>
-        Token ini <b>terikat ke bot tertentu</b> — semua operasi (list/upload/download/stream) otomatis memakai storage bot itu, tidak peduli bot mana yang sedang aktif di UI.<br><br>
-        Contoh: <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">curl -H "Authorization: Bearer tas_xxx" http://HOST:PORT/api/files</code><br>
+        API key <b>milik app</b> dan <b>terikat ke bot target</b> yang dipilih saat dibuat — semua operasi (list/upload/download/stream) memakai storage bot itu, tidak peduli bot mana yang sedang aktif di UI.<br><br>
+        Contoh: <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">curl -H "Authorization: Bearer ***" http://HOST:PORT/api/files</code><br>
         <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">/api/stream</code> dan <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">/s/&lt;token&gt;</code> tetap publik (capability URL by hash).
       </div>
     </main>

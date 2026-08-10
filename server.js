@@ -125,8 +125,9 @@ function resolveAuth(req) {
     if (row) {
       const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(row.profile_id);
       if (prof) {
+        const app = row.app_id ? db.prepare('SELECT * FROM apps WHERE id=?').get(row.app_id) : null;
         try { db.prepare('UPDATE api_tokens SET last_used_at=? WHERE id=?').run(Date.now(), row.id); } catch {}
-        return { profile: prof, user: { user_id: 0, username: 'api:' + (row.name || 'bot') } };
+        return { app, profile: prof, user: { user_id: 0, username: 'api:' + (row.name || 'bot') } };
       }
     }
   }
@@ -210,6 +211,9 @@ app.post('/api/profiles', (req, res) => {
   fs.mkdirSync(dir, { recursive: true });
   const info = db.prepare('INSERT INTO profiles (name, data_dir, created_at) VALUES (?,?,?)')
     .run(name, dir, Date.now());
+  // bot baru langsung di-attach ke app yang dipilih (default: app pertama)
+  const appId = parseInt(req.body?.appId, 10) || appIdFor(req);
+  if (appId) db.prepare('INSERT OR IGNORE INTO app_profiles (app_id, profile_id) VALUES (?,?)').run(appId, info.lastInsertRowid);
   logActivity('profile', 'create ' + name);
   res.json(toProfile(db.prepare('SELECT * FROM profiles WHERE id=?').get(info.lastInsertRowid)));
 });
@@ -279,6 +283,7 @@ app.delete('/api/profiles/:id', (req, res) => {
   const c = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
   if (c <= 1) return res.status(400).json({ error: 'Tidak bisa hapus profile terakhir' });
   stopBotIngest(p.id); // berhenti polling bot profile yang dihapus
+  db.prepare('DELETE FROM app_profiles WHERE profile_id=?').run(p.id);
   db.prepare('DELETE FROM profiles WHERE id=?').run(p.id);
   if (p.is_active) {
     const next = db.prepare('SELECT * FROM profiles ORDER BY id LIMIT 1').get();
@@ -289,10 +294,74 @@ app.delete('/api/profiles/:id', (req, res) => {
   res.json({ ok: true, dataDirKept: p.data_dir });
 });
 
+// ---------------- apps API ----------------
+app.get('/api/apps', (req, res) => {
+  const apps = db.prepare('SELECT * FROM apps ORDER BY id').all().map(toApp);
+  const memberships = db.prepare('SELECT app_id, profile_id FROM app_profiles').all();
+  const counts = db.prepare('SELECT app_id, COUNT(*) c FROM app_profiles GROUP BY app_id').all();
+  for (const a of apps) {
+    a.bots = memberships.filter((m) => m.app_id === a.id).map((m) => m.profile_id);
+    a.botCount = (counts.find((c) => c.app_id === a.id) || {}).c || 0;
+  }
+  res.json({ apps });
+});
+
+app.post('/api/apps', (req, res) => {
+  const name = (req.body?.name || '').trim().slice(0, 60);
+  if (!name) return res.status(400).json({ error: 'Nama app wajib diisi' });
+  const info = db.prepare('INSERT INTO apps (name, description, created_at) VALUES (?,?,?)')
+    .run(name, (req.body?.description || '').toString().slice(0, 200), Date.now());
+  logActivity('app', 'create "' + name + '"');
+  res.json(toApp(db.prepare('SELECT * FROM apps WHERE id=?').get(info.lastInsertRowid)));
+});
+
+app.post('/api/apps/:id/rename', (req, res) => {
+  const a = db.prepare('SELECT * FROM apps WHERE id=?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'App tidak ditemukan' });
+  const name = (req.body?.name || '').trim().slice(0, 60);
+  if (!name) return res.status(400).json({ error: 'Nama app wajib diisi' });
+  db.prepare('UPDATE apps SET name=? WHERE id=?').run(name, a.id);
+  logActivity('app', 'rename "' + name + '"');
+  res.json(toApp({ ...a, name }));
+});
+
+app.delete('/api/apps/:id', (req, res) => {
+  const a = db.prepare('SELECT * FROM apps WHERE id=?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'App tidak ditemukan' });
+  const c = db.prepare('SELECT COUNT(*) c FROM apps').get().c;
+  if (c <= 1) return res.status(400).json({ error: 'Tidak bisa hapus app terakhir' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM app_profiles WHERE app_id=?').run(a.id);
+    db.prepare('DELETE FROM api_tokens WHERE app_id=?').run(a.id);
+    db.prepare('DELETE FROM folder_files WHERE folder_id IN (SELECT id FROM folders WHERE app_id=?)').run(a.id);
+    db.prepare('DELETE FROM folders WHERE app_id=?').run(a.id);
+    db.prepare('DELETE FROM apps WHERE id=?').run(a.id);
+  })();
+  logActivity('app', 'delete "' + a.name + '"');
+  res.json({ ok: true });
+});
+
+// attach/detach bot ke app (many-to-many: 1 bot bisa di banyak app)
+app.post('/api/apps/:id/bots', (req, res) => {
+  const a = db.prepare('SELECT * FROM apps WHERE id=?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'App tidak ditemukan' });
+  const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(parseInt(req.body?.profileId, 10) || 0);
+  if (!p) return res.status(400).json({ error: 'Bot tidak ditemukan' });
+  db.prepare('INSERT OR IGNORE INTO app_profiles (app_id, profile_id) VALUES (?,?)').run(a.id, p.id);
+  logActivity('app', 'attach bot "' + p.name + '" → "' + a.name + '"');
+  res.json({ ok: true });
+});
+
+app.delete('/api/apps/:id/bots/:profileId', (req, res) => {
+  db.prepare('DELETE FROM app_profiles WHERE app_id=? AND profile_id=?').run(req.params.id, req.params.profileId);
+  logActivity('app', 'detach bot #' + req.params.profileId);
+  res.json({ ok: true });
+});
+
 // ---------------- TAS helpers ----------------
-function runTas(args, timeoutMs = 900000) {
+function runTas(args, timeoutMs = 900000, profile = null) {
   return new Promise((resolve, reject) => {
-    execFile('tas', args, { env: tasEnv(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('tas', args, { env: tasEnv(profile), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const msg = (stderr || stdout || err.message || '').toString();
         reject(new Error(msg.slice(-600) || err.message));
@@ -310,8 +379,8 @@ function parseTasJson(stdout) {
   return JSON.parse(i >= 0 ? s.slice(i) : s);
 }
 
-async function findRecord(id) {
-  const { stdout } = await runTas(['list', '--json']);
+async function findRecord(id, profile = null) {
+  const { stdout } = await runTas(['list', '--json'], 900000, profile);
   return parseTasJson(stdout).find((f) => f.hash === id || f.filename === id) || null;
 }
 
@@ -614,6 +683,54 @@ db.exec(`CREATE TABLE IF NOT EXISTS api_tokens (
   last_used_at INTEGER
 )`);
 
+// ---------------- apps (workspace: grup bot + API keys) ----------------
+db.exec(`CREATE TABLE IF NOT EXISTS apps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS app_profiles (
+  app_id INTEGER NOT NULL,
+  profile_id INTEGER NOT NULL,
+  PRIMARY KEY (app_id, profile_id)
+);`);
+// kolom app_id utk api_tokens & folders (kalau belum ada — migrasi)
+const tokCols = db.prepare('PRAGMA table_info(api_tokens)').all();
+if (!tokCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE api_tokens ADD COLUMN app_id INTEGER');
+const folderCols = db.prepare('PRAGMA table_info(folders)').all();
+if (!folderCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE folders ADD COLUMN app_id INTEGER');
+
+function seedDefaultApp() {
+  if (db.prepare('SELECT COUNT(*) c FROM apps').get().c > 0) return;
+  const info = db.prepare('INSERT INTO apps (name, description, created_at) VALUES (?,?,?)')
+    .run('Default', 'App utama (migrasi otomatis)', Date.now());
+  const appId = info.lastInsertRowid;
+  const ins = db.prepare('INSERT OR IGNORE INTO app_profiles (app_id, profile_id) VALUES (?,?)');
+  for (const p of db.prepare('SELECT id FROM profiles').all()) ins.run(appId, p.id);
+  console.log('🌱 seed app Default (id ' + appId + ') — semua bot di-attach');
+}
+seedDefaultApp();
+// baris legacy tanpa app → app pertama
+const firstApp = db.prepare('SELECT id FROM apps ORDER BY id LIMIT 1').get();
+if (firstApp) {
+  db.prepare('UPDATE folders SET app_id=? WHERE app_id IS NULL').run(firstApp.id);
+  db.prepare('UPDATE api_tokens SET app_id=? WHERE app_id IS NULL').run(firstApp.id);
+}
+
+function toApp(a) {
+  return { id: a.id, name: a.name, description: a.description, createdAt: a.created_at };
+}
+
+// resolve app utk operasi per-app: query param > konteks token API > app pertama
+function appIdFor(req) {
+  if (req?.query?.appId) return parseInt(req.query.appId, 10) || null;
+  const ctx = als.getStore() || {};
+  if (ctx.app?.id) return ctx.app.id;
+  const first = db.prepare('SELECT id FROM apps ORDER BY id LIMIT 1').get();
+  return first ? first.id : null;
+}
+
 // ---------------- folders (virtual, model Google Drive) ----------------
 // File asli tetap di Telegram (flat). Folder = layer organisasi di SQLite:
 // folder bertingkat (parent_id), 1 file (by hash) maksimal di 1 folder.
@@ -630,7 +747,10 @@ CREATE TABLE IF NOT EXISTS folder_files (
 );`);
 
 app.get('/api/folders', (req, res) => {
-  const folders = db.prepare('SELECT * FROM folders ORDER BY name').all();
+  const appId = appIdFor(req);
+  const folders = appId
+    ? db.prepare('SELECT * FROM folders WHERE app_id=? ORDER BY name').all(appId)
+    : db.prepare('SELECT * FROM folders ORDER BY name').all();
   const counts = db.prepare('SELECT folder_id, COUNT(*) c FROM folder_files GROUP BY folder_id').all();
   const countMap = {};
   for (const c of counts) countMap[c.folder_id] = c.c;
@@ -654,8 +774,8 @@ app.post('/api/folders', (req, res) => {
   if (parentId && !db.prepare('SELECT id FROM folders WHERE id=?').get(parentId)) {
     return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
   }
-  const info = db.prepare('INSERT INTO folders (name, parent_id, created_at) VALUES (?,?,?)')
-    .run(name, parentId, Date.now());
+  const info = db.prepare('INSERT INTO folders (name, parent_id, app_id, created_at) VALUES (?,?,?,?)')
+    .run(name, parentId, appIdFor(req), Date.now());
   logActivity('folder', 'create "' + name + '"');
   res.json({ id: info.lastInsertRowid, name, parentId, createdAt: Date.now(), fileCount: 0 });
 });
@@ -736,21 +856,32 @@ app.post('/api/files/folder', (req, res) => {
 });
 
 app.get('/api/tokens', (req, res) => {
-  const rows = db.prepare(`SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at
-    FROM api_tokens t LEFT JOIN profiles p ON p.id=t.profile_id ORDER BY t.id DESC`).all();
+  const appId = parseInt(req.query.appId, 10) || null;
+  const base = `SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at, t.app_id,
+    a.name AS app_name FROM api_tokens t LEFT JOIN profiles p ON p.id=t.profile_id LEFT JOIN apps a ON a.id=t.app_id`;
+  const rows = appId
+    ? db.prepare(base + ' WHERE t.app_id=? ORDER BY t.id DESC').all(appId)
+    : db.prepare(base + ' ORDER BY t.id DESC').all();
   res.json({ tokens: rows });
 });
 
 app.post('/api/tokens', (req, res) => {
   const profileId = parseInt(req.body?.profileId, 10);
+  const appId = parseInt(req.body?.appId, 10) || null;
   const name = (req.body?.name || '').trim().slice(0, 60) || 'Token';
   const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(profileId);
   if (!prof) return res.status(400).json({ error: 'Profile bot tidak ditemukan' });
+  if (appId) {
+    const a = db.prepare('SELECT * FROM apps WHERE id=?').get(appId);
+    if (!a) return res.status(400).json({ error: 'App tidak ditemukan' });
+    const m = db.prepare('SELECT 1 FROM app_profiles WHERE app_id=? AND profile_id=?').get(appId, profileId);
+    if (!m) return res.status(400).json({ error: 'Bot tidak terdaftar di app tersebut' });
+  }
   const token = 'tas_' + crypto.randomBytes(24).toString('hex');
-  db.prepare('INSERT INTO api_tokens (token, profile_id, name, created_at) VALUES (?,?,?,?)')
-    .run(token, profileId, name, Date.now());
+  db.prepare('INSERT INTO api_tokens (token, profile_id, app_id, name, created_at) VALUES (?,?,?,?,?)')
+    .run(token, profileId, appId, name, Date.now());
   logActivity('token', 'create "' + name + '" utk ' + prof.name);
-  res.json({ token, name, profileId, profileName: prof.name });
+  res.json({ token, name, profileId, appId, profileName: prof.name });
 });
 
 app.delete('/api/tokens/:id', (req, res) => {
@@ -772,12 +903,34 @@ app.get('/api/status', async (req, res) => {
 
 app.get('/api/files', async (req, res) => {
   try {
+    // ?all=1 → gabungan file dari semua bot di app (tiap file dilabeli bot asal)
+    if (req.query.all === '1') {
+      const ctx = als.getStore() || {};
+      const appId = parseInt(req.query.appId, 10) || ctx.app?.id || appIdFor(req);
+      const profs = appId
+        ? db.prepare('SELECT p.* FROM profiles p JOIN app_profiles ap ON ap.profile_id=p.id WHERE ap.app_id=?').all(appId)
+        : db.prepare('SELECT * FROM profiles WHERE initialized=1').all();
+      const files = [];
+      for (const prof of profs) {
+        try {
+          const { stdout } = await runTas(['list', '--json'], 900000, prof);
+          for (const f of parseTasJson(stdout)) files.push({ ...f, profileId: prof.id, profileName: prof.name });
+        } catch {}
+      }
+      return res.json({ files });
+    }
     const { stdout } = await runTas(['list', '--json']);
     res.json({ files: parseTasJson(stdout) });
   } catch (e) {
     res.json({ files: [], error: e.message });
   }
 });
+
+// resolve bot target dari query (dipakai operasi file di view "semua bot")
+function profileFromQuery(req) {
+  const pid = parseInt(req.query.profileId, 10);
+  return pid ? db.prepare('SELECT * FROM profiles WHERE id=?').get(pid) : null;
+}
 
 // upload: simpan dengan nama asli (tas push pakai basename sebagai filename)
 const upload = multer({
@@ -856,11 +1009,12 @@ app.get('/api/jobs', (req, res) => {
 
 app.get('/api/download/:id', async (req, res) => {
   const id = req.params.id;
+  const prof = profileFromQuery(req);
   const outPath = path.join(DL_DIR, 'dl-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'));
   try {
-    const rec = await findRecord(id);
+    const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
-    await runTas(['pull', id, outPath]);
+    await runTas(['pull', id, outPath], 900000, prof);
     logActivity('download', rec.filename);
     res.download(outPath, rec.filename, () => { try { fs.unlinkSync(outPath); } catch {} });
   } catch (e) {
@@ -871,7 +1025,8 @@ app.get('/api/download/:id', async (req, res) => {
 
 app.post('/api/delete/:id', (req, res) => {
   // --hard: hapus dari index DAN dari chat Telegram (sync penuh)
-  const child = spawn('tas', ['delete', req.params.id, '--hard'], { env: tasEnv() });
+  const prof = profileFromQuery(req);
+  const child = spawn('tas', ['delete', req.params.id, '--hard'], { env: tasEnv(prof) });
   let out = '';
   child.stdout.on('data', (d) => { out = (out + d).slice(-600); });
   child.stderr.on('data', (d) => { out = (out + d).slice(-600); });
@@ -909,25 +1064,27 @@ app.post('/api/delete/:id', (req, res) => {
 // ---------------- streaming ----------------
 const pullPromises = new Map();
 
-function ensureCached(id, cachePath) {
+function ensureCached(id, cachePath, profile = null) {
   if (fs.existsSync(cachePath)) return Promise.resolve(cachePath);
-  if (pullPromises.has(id)) return pullPromises.get(id);
-  const p = runTas(['pull', id, cachePath], 1200000)
+  if (pullPromises.has(cachePath)) return pullPromises.get(cachePath);
+  const p = runTas(['pull', id, cachePath], 1200000, profile)
     .then(() => cachePath)
     .catch((e) => { try { fs.unlinkSync(cachePath); } catch {} throw e; })
-    .finally(() => pullPromises.delete(id));
-  pullPromises.set(id, p);
+    .finally(() => pullPromises.delete(cachePath));
+  pullPromises.set(cachePath, p);
   return p;
 }
 
 app.get('/api/stream/:id', async (req, res) => {
   const id = req.params.id;
+  const prof = profileFromQuery(req);
   try {
-    const rec = await findRecord(id);
+    const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
     const ext = path.extname(rec.filename || '') || '.bin';
-    const cachePath = path.join(CACHE_DIR, rec.hash + ext);
-    await ensureCached(id, cachePath);
+    // cache per profile — hash bisa sama di dua bot berbeda
+    const cachePath = path.join(CACHE_DIR, `${rec.hash}-${prof ? prof.id : 'x'}${ext}`);
+    await ensureCached(id, cachePath, prof);
     const disp = `inline; filename*=UTF-8''${encodeURIComponent(rec.filename)}`;
     res.sendFile(cachePath, { headers: { 'Content-Disposition': disp } }, (err) => {
       if (err && !res.headersSent) res.status(500).json({ error: err.message });

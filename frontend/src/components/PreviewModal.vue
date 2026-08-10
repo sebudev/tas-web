@@ -16,6 +16,8 @@ const rootRef = ref(null);
 onMounted(() => { rootRef.value?.focus(); });
 
 const file = computed(() => store.filtered[store.current] || null);
+// di view "Semua Bot" file punya profileId → operasi harus target bot asal
+const profileQuery = computed(() => (file.value?.profileId ? `?profileId=${file.value.profileId}` : ''));
 
 function nav(dir) {
   const n = store.filtered.length;
@@ -36,7 +38,7 @@ async function onDelete() {
   });
   if (!ok) return;
   try {
-    await apiPost('/api/delete/' + encodeURIComponent(f.hash));
+    await apiPost('/api/delete/' + encodeURIComponent(f.hash) + profileQuery.value);
     toast('File dihapus', 'ok');
     close();
     loadFiles();
@@ -59,8 +61,8 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
       <button class="nav prev pointer-events-auto" @click="nav(-1)">‹</button>
 
       <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">
-        <video v-if="isVideo(file)" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash)" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" />
-        <img v-else-if="isImage(file)" :src="'/api/stream/' + encodeURIComponent(file.hash)" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" />
+        <video v-if="isVideo(file)" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" />
+        <img v-else-if="isImage(file)" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" />
         <div v-else class="text-[52px] text-center p-8 bg-card rounded-xl2 border border-line">{{ iconFor(file.filename) }}</div>
       </div>
 
@@ -72,7 +74,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
       </div>
 
       <div class="mt-3.5 flex gap-2 flex-wrap justify-center pointer-events-auto">
-        <a class="btn" :href="'/api/download/' + encodeURIComponent(file.hash)">⬇ Download</a>
+        <a class="btn" :href="'/api/download/' + encodeURIComponent(file.hash) + profileQuery">⬇ Download</a>
         <button class="btn-ghost" @click="showShare = true">🔗 Share</button>
         <button class="btn-danger" @click="onDelete">🗑 Hapus</button>
       </div>

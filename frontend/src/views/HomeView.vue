@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { store, PAGE_SIZE } from '../store';
-import { loadFiles, loadStatus, loadProfiles, loadFolders, pageItems, totalPages, folderPath, folderChildren, folderById, openFolder, createFolder, clearSelection } from '../composables/useApp';
+import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, folderById, openFolder, createFolder, clearSelection } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import TopBar from '../components/TopBar.vue';
 import Toolbar from '../components/Toolbar.vue';
@@ -22,7 +22,9 @@ const breadcrumb = computed(() => (store.currentFolder ? folderPath(store.curren
 const subfolders = computed(() => (store.currentFolder ? folderChildren(store.currentFolder) : []));
 
 async function init() {
-  await Promise.all([loadProfiles(), loadFolders(), loadFiles(), loadStatus()]);
+  await loadProfiles();
+  await loadApps();
+  await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
 }
 onMounted(init);
 
