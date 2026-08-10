@@ -1213,6 +1213,357 @@ app.get('/api/activity', (req, res) => {
   res.json({ activity: db.prepare('SELECT * FROM activity ORDER BY ts DESC LIMIT 50').all() });
 });
 
+// ---------------- S3 gateway credentials ----------------
+// Access key + secret utk klien S3 (rclone/s3cmd/aws cli). 1 bot = 1 bucket.
+db.exec(`CREATE TABLE IF NOT EXISTS s3_creds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER UNIQUE,
+  access_key TEXT UNIQUE,
+  secret_key TEXT,
+  created_at INTEGER
+)`);
+
+app.get('/api/s3', (req, res) => {
+  const rows = db.prepare(`SELECT c.id, c.profile_id, c.access_key, c.created_at, p.name AS profile_name,
+    p.bot_username FROM s3_creds c LEFT JOIN profiles p ON p.id=c.profile_id ORDER BY c.id`).all();
+  res.json({ creds: rows });
+});
+
+app.post('/api/s3/creds', (req, res) => {
+  const profileId = parseInt(req.body?.profileId, 10);
+  const prof = db.prepare('SELECT * FROM profiles WHERE id=?').get(profileId);
+  if (!prof) return res.status(400).json({ error: 'Bot tidak ditemukan' });
+  const existing = db.prepare('SELECT * FROM s3_creds WHERE profile_id=?').get(profileId);
+  if (existing) return res.status(400).json({ error: 'Bot ini sudah punya kredensial S3 — hapus dulu kalau mau buat ulang' });
+  const accessKey = 'tas' + crypto.randomBytes(12).toString('hex').slice(0, 20);
+  const secretKey = crypto.randomBytes(24).toString('base64url');
+  const info = db.prepare('INSERT INTO s3_creds (profile_id, access_key, secret_key, created_at) VALUES (?,?,?,?)')
+    .run(profileId, accessKey, secretKey, Date.now());
+  logActivity('s3', 'create creds utk ' + prof.name);
+  res.json({
+    id: info.lastInsertRowid, profileId, profileName: prof.name,
+    accessKey, secretKey, // secret hanya muncul SEKALI saat dibuat
+    bucket: bucketForProfile(prof),
+    endpoint: S3_PREFIX,
+  });
+});
+
+app.delete('/api/s3/creds/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM s3_creds WHERE id=?').run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'Kredensial tidak ditemukan' });
+  res.json({ ok: true });
+});
+
+// ---------------- S3-compatible gateway ----------------
+// tas-web bertingkah sebagai S3 object storage (path-style, SigV4).
+// File tetap disimpan di Telegram via backend tas — 1 bot = 1 bucket.
+const S3_PREFIX = '/s3';
+const S3_MAX_BYTES = 2 * 1024 * 1024 * 1024; // sama dgn cap upload web
+
+function awsUriEncode(s) {
+  return encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+function slugify(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || '';
+}
+
+// nama bucket = slug nama profile; unik dgn fallback bot-<id>
+function bucketForProfile(prof) {
+  let slug = slugify(prof.name);
+  const others = db.prepare('SELECT id, name FROM profiles WHERE id != ?').all(prof.id);
+  if (!slug || others.some((o) => slugify(o.name) === slug)) slug = 'bot-' + prof.id;
+  return slug;
+}
+
+function profileForBucket(bucket) {
+  const b = String(bucket || '').toLowerCase();
+  for (const p of db.prepare('SELECT * FROM profiles').all()) {
+    if (bucketForProfile(p) === b) return p;
+  }
+  const m = b.match(/^bot-(\d+)$/);
+  if (m) return db.prepare('SELECT * FROM profiles WHERE id=?').get(Number(m[1]));
+  return null;
+}
+
+function xmlEscape(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  }[c]));
+}
+
+function s3Xml(res, status, body) {
+  res.status(status).set('Content-Type', 'application/xml').send('<?xml version="1.0" encoding="UTF-8"?>\n' + body);
+}
+
+function s3Err(res, status, code, message) {
+  s3Xml(res, status, `<Error><Code>${xmlEscape(code)}</Code><Message>${xmlEscape(message)}</Message></Error>`);
+}
+
+function mimeType(name) {
+  const ext = path.extname(name || '').toLowerCase();
+  const map = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+    '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.webm': 'video/webm',
+    '.mkv': 'video/x-matroska', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.pdf': 'application/pdf', '.zip': 'application/zip',
+    '.json': 'application/json', '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv',
+    '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+function hmac(key, data) { return crypto.createHmac('sha256', key).update(data).digest(); }
+
+// Verifikasi AWS Signature v4 (header auth). Kembalian {ok} atau {ok:false, code, msg}.
+function verifySigV4(req, secret) {
+  const auth = req.headers.authorization || '';
+  const m = auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([0-9a-f]{64})$/i);
+  if (!m) return { ok: false, code: 'InvalidArgument', msg: 'Authorization header tidak valid' };
+  const [, , dateStamp, region, signedHeadersStr, signature] = m;
+  const amzDate = req.headers['x-amz-date'];
+  if (!amzDate) return { ok: false, code: 'InvalidArgument', msg: 'Header x-amz-date wajib ada' };
+
+  // canonical URI = path persis seperti dikirim (encoded), query di-sort & re-encode
+  const raw = req.originalUrl;
+  const qIdx = raw.indexOf('?');
+  const canonicalUri = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+  const queryRaw = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
+  let pairs = [];
+  if (queryRaw) {
+    try {
+      pairs = queryRaw.split('&').filter(Boolean).map((p) => {
+        const i = p.indexOf('=');
+        const k = i >= 0 ? p.slice(0, i) : p;
+        const v = i >= 0 ? p.slice(i + 1) : '';
+        return { k: decodeURIComponent(k), v: decodeURIComponent(v) };
+      }).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.v < b.v ? -1 : a.v > b.v ? 1 : 0));
+    } catch { return { ok: false, code: 'InvalidArgument', msg: 'Query string tidak valid' }; }
+  }
+  const canonicalQuery = pairs.map((p) => awsUriEncode(p.k) + '=' + awsUriEncode(p.v)).join('&');
+
+  const signedHeaders = signedHeadersStr.split(';').map((h) => h.trim().toLowerCase());
+  let canonicalHeaders = '';
+  for (const h of signedHeaders) {
+    const val = req.headers[h];
+    if (val == null) return { ok: false, code: 'InvalidArgument', msg: 'Signed header tidak ada: ' + h };
+    canonicalHeaders += h + ':' + String(val).trim().replace(/\s+/g, ' ') + '\n';
+  }
+  // tanpa header x-amz-content-sha256 → body kosong (hash string kosong)
+  const payloadHash = req.headers['x-amz-content-sha256'] ||
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  const canonicalRequest = [req.method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n');
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+  let k = hmac('AWS4' + secret, dateStamp);
+  k = hmac(k, region);
+  k = hmac(k, 's3');
+  k = hmac(k, 'aws4_request');
+  const expect = hmac(k, stringToSign).toString('hex');
+  const ok = expect.length === signature.length &&
+    crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(signature));
+  return ok ? { ok: true } : { ok: false, code: 'SignatureDoesNotMatch', msg: 'Signature tidak cocok' };
+}
+
+// middleware auth utk semua request /s3
+app.use('/s3', (req, res, next) => {
+  const m = (req.headers.authorization || '').match(/Credential=([^/]+)\//);
+  const accessKey = m ? m[1] : '';
+  const cred = accessKey ? db.prepare('SELECT * FROM s3_creds WHERE access_key=?').get(accessKey) : null;
+  if (!cred) return s3Err(res, 403, 'InvalidAccessKeyId', 'Access key tidak dikenal');
+  const v = verifySigV4(req, cred.secret_key);
+  if (!v.ok) return s3Err(res, 403, v.code || 'SignatureDoesNotMatch', v.msg || 'Signature tidak cocok');
+  req.s3Cred = cred;
+  req.s3Profile = db.prepare('SELECT * FROM profiles WHERE id=?').get(cred.profile_id) || null;
+  next();
+});
+
+// ---------------- S3 routes ----------------
+app.get('/s3', (req, res) => {
+  const prof = req.s3Profile;
+  if (!prof) return s3Err(res, 403, 'AccessDenied', 'Profile bot tidak ditemukan');
+  const bucket = bucketForProfile(prof);
+  const created = new Date(prof.created_at || Date.now()).toISOString();
+  s3Xml(res, 200, `<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Owner><ID>tas</ID><DisplayName>tas-web</DisplayName></Owner>
+  <Buckets><Bucket><Name>${xmlEscape(bucket)}</Name><CreationDate>${created}</CreationDate></Bucket></Buckets>
+</ListAllMyBucketsResult>`);
+});
+
+function bucketAccess(req, res) {
+  const prof = profileForBucket(req.params.bucket);
+  if (!prof) { s3Err(res, 404, 'NoSuchBucket', 'Bucket tidak ditemukan'); return null; }
+  if (prof.id !== req.s3Cred.profile_id) { s3Err(res, 403, 'AccessDenied', 'Bucket milik bot lain'); return null; }
+  return prof;
+}
+
+app.get('/s3/:bucket', async (req, res) => {
+  const prof = bucketAccess(req, res);
+  if (!prof) return;
+  const prefix = req.query.prefix || '';
+  const delimiter = req.query.delimiter || '';
+  const listType = req.query['list-type'] === '2' ? 2 : 1;
+  try {
+    const { stdout } = await runTas(['list', '--json'], 900000, prof);
+    let files = parseTasJson(stdout);
+    if (prefix) files = files.filter((f) => (f.filename || '').startsWith(prefix));
+    files.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
+    const contents = [];
+    const prefixes = new Set();
+    for (const f of files) {
+      const key = f.filename || '';
+      if (delimiter) {
+        const rest = key.slice(prefix.length);
+        const idx = rest.indexOf(delimiter);
+        if (idx >= 0) { prefixes.add(prefix + rest.slice(0, idx + delimiter.length)); continue; }
+      }
+      contents.push(`<Contents><Key>${xmlEscape(key)}</Key><LastModified>${new Date(f.created_at || Date.now()).toISOString()}</LastModified><ETag>&quot;${xmlEscape(f.hash || '')}&quot;</ETag><Size>${f.original_size || 0}</Size><StorageClass>STANDARD</StorageClass></Contents>`);
+    }
+    const common = [...prefixes].sort()
+      .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`).join('');
+    const name = xmlEscape(req.params.bucket);
+    const body = listType === 2
+      ? `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Delimiter>${xmlEscape(delimiter)}</Delimiter><IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys>${common}${contents.join('')}</ListBucketResult>`
+      : `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Marker></Marker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents.join('')}${common}</ListBucketResult>`;
+    s3Xml(res, 200, body);
+  } catch (e) {
+    s3Err(res, 500, 'InternalError', e.message);
+  }
+});
+
+async function getObject(req, res, headOnly) {
+  const prof = bucketAccess(req, res);
+  if (!prof) return;
+  const key = req.params[0];
+  try {
+    const rec = await findKey(prof, key);
+    if (!rec) return s3Err(res, 404, 'NoSuchKey', 'Key tidak ditemukan');
+    const meta = {
+      'Content-Type': mimeType(rec.filename),
+      'Content-Length': String(rec.original_size || 0),
+      'ETag': '"' + rec.hash + '"',
+      'Last-Modified': new Date(rec.created_at || Date.now()).toUTCString(),
+      'x-amz-meta-tas-hash': rec.hash,
+    };
+    if (headOnly) return res.set(meta).status(200).end();
+    const ext = path.extname(rec.filename || '') || '.bin';
+    const cachePath = path.join(CACHE_DIR, `${rec.hash}-${prof.id}${ext}`);
+    await ensureCached(key, cachePath, prof);
+    res.set(meta);
+    fs.createReadStream(cachePath).pipe(res);
+  } catch (e) {
+    s3Err(res, 500, 'InternalError', e.message);
+  }
+}
+
+app.get('/s3/:bucket/*', (req, res) => getObject(req, res, false));
+app.head('/s3/:bucket/*', (req, res) => getObject(req, res, true));
+
+// hapus file lama dgn nama sama (overwrite semantics S3) — async, tidak blokir respon
+function deleteByName(prof, name, callback) {
+  const c = spawn('tas', ['delete', name, '--hard'], { env: tasEnv(prof) });
+  let out = '';
+  c.stdout.on('data', (d) => { out = (out + d).slice(-300); });
+  c.stderr.on('data', (d) => { out = (out + d).slice(-300); });
+  c.on('error', () => callback && callback(null));
+  c.stdin.write('y\n');
+  c.stdin.end();
+  c.on('close', () => callback && callback(null));
+}
+
+// cari object by key (nama file) — kalau duplikat nama, ambil yang TERBARU
+async function findKey(prof, key) {
+  const { stdout } = await runTas(['list', '--json'], 900000, prof);
+  const all = parseTasJson(stdout).filter((f) => f.filename === key);
+  if (!all.length) return null;
+  return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+}
+
+app.put('/s3/:bucket/*', async (req, res) => {
+  if (req.query.uploadId || req.query.partNumber) {
+    return s3Err(res, 501, 'NotImplemented', 'Multipart upload belum didukung (fase 2)');
+  }
+  const prof = bucketAccess(req, res);
+  if (!prof) return;
+  const key = req.params[0];
+  const len = parseInt(req.headers['content-length'] || '0', 10);
+  if (len > S3_MAX_BYTES) return s3Err(res, 400, 'EntityTooLarge', 'File melebihi 2GB');
+  const expectedHash = req.headers['x-amz-content-sha256'] || '';
+  const tmpPath = path.join(TMP_DIR, 's3-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'));
+  try {
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(tmpPath);
+      const hash = crypto.createHash('sha256');
+      req.on('data', (d) => hash.update(d));
+      ws.on('finish', () => resolve(hash));
+      ws.on('error', reject);
+      req.on('error', reject);
+      req.pipe(ws);
+    }).then((hash) => {
+      if (expectedHash && !/^(UNSIGNED-PAYLOAD|STREAMING-)/.test(expectedHash) && hash.digest('hex') !== expectedHash) {
+        throw Object.assign(new Error('Payload hash tidak cocok'), { code: 'XAmzContentSHA256Mismatch', status: 400 });
+      }
+    });
+    if (!fs.statSync(tmpPath).size) {
+      fs.unlinkSync(tmpPath);
+      return s3Err(res, 400, 'InvalidRequest', 'Body kosong');
+    }
+    // overwrite semantics: hapus object lama (by hash) DULU biar key unik,
+    // baru push yang baru — kalau konten sama, tas bikin record baru (dedup
+    // tidak aktif karena record lama sudah hilang)
+    const existing = await findKey(prof, key);
+    if (existing) {
+      await new Promise((resolve) => deleteByName(prof, existing.hash, resolve));
+      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(existing.hash);
+    }
+    const job = createJob(key);
+    job.size = fs.statSync(tmpPath).size;
+    await new Promise((resolve) => {
+      pushJob(job, tmpPath, key, null, () => resolve(), prof);
+    });
+    if (job.status !== 'done') {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      // dedup TAS (race/sisa) = konten sama → idempotent PUT (perilaku S3: 200 OK)
+      if (/duplicate|already uploaded/i.test(job.message || '')) {
+        return res.status(200).set('ETag', '"' + (existing?.hash || '') + '"').end();
+      }
+      return s3Err(res, 500, 'InternalError', job.message);
+    }
+    res.status(200).set('ETag', '"' + job.hash + '"').end();
+  } catch (e) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    s3Err(res, e.status || 500, e.code || 'InternalError', e.message);
+  }
+});
+
+app.delete('/s3/:bucket/*', async (req, res) => {
+  const prof = bucketAccess(req, res);
+  if (!prof) return;
+  const key = req.params[0];
+  try {
+    const rec = await findKey(prof, key);
+    if (!rec) return res.status(204).end(); // delete key yang tidak ada = 204 (S3)
+    await new Promise((resolve) => deleteByName(prof, rec.hash, resolve));
+    db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(rec.hash);
+    res.status(204).end();
+  } catch (e) {
+    s3Err(res, 500, 'InternalError', e.message);
+  }
+});
+
+// bucket-level ops: bucket = bot yang sudah ada → CreateBucket idempotent sukses
+app.put('/s3/:bucket', (req, res) => {
+  if (profileForBucket(req.params.bucket)) return res.status(200).end();
+  s3Err(res, 404, 'NoSuchBucket', 'Bucket tidak ditemukan');
+});
+app.delete('/s3/:bucket', (req, res) => {
+  if (profileForBucket(req.params.bucket)) return res.status(204).end(); // tidak hapus bot via S3
+  s3Err(res, 404, 'NoSuchBucket', 'Bucket tidak ditemukan');
+});
+app.post('/s3/:bucket', (req, res) => s3Err(res, 501, 'NotImplemented', 'Multipart upload belum didukung (fase 2)'));
+app.post('/s3/:bucket/*', (req, res) => s3Err(res, 501, 'NotImplemented', 'Multipart upload belum didukung (fase 2)'));
+
 // ---------------- static ----------------
 app.use(express.static(path.join(__dirname, 'public')));
 
