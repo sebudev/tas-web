@@ -1565,7 +1565,17 @@ app.post('/s3/:bucket', (req, res) => s3Err(res, 501, 'NotImplemented', 'Multipa
 app.post('/s3/:bucket/*', (req, res) => s3Err(res, 501, 'NotImplemented', 'Multipart upload belum didukung (fase 2)'));
 
 // ---------------- static ----------------
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('index.html')) {
+      // index.html wajib di-revalidate: biar update UI langsung kebawa (asset di-hash)
+      res.setHeader('Cache-Control', 'no-cache');
+    } else {
+      // asset ber-hash aman di-cache lama
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`tas-web v2 listening on :${PORT} (data: ${TAS_DATA_DIR}, auth: ${authEnabled ? 'ON' : 'OFF'})`);
