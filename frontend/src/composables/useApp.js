@@ -170,15 +170,25 @@ export async function switchApp(id) {
   store.currentFolder = null;
   clearSelection();
   ensureActiveBot();
+  await syncActiveBot(); // server ikut pindah ke bot pertama di app ini
   await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
 }
 
+// sinkronkan profile aktif server dengan bot yang dipilih di UI —
+// tanpa ini, semua operasi file single-bot memakai storage bot global
+// (bug: pilih bot apapun = file yang sama)
+async function syncActiveBot() {
+  if (store.allBots || !store.activeId) return;
+  try { await apiPost('/api/profiles/' + store.activeId + '/switch'); } catch { /* listing tetap jalan */ }
+}
+
 // pilih bot di dalam app; 'all' = tampilkan gabungan file semua bot
-export function selectBot(id) {
+export async function selectBot(id) {
   store.allBots = id === 'all';
   if (!store.allBots) store.activeId = id;
   store.page = 0;
   clearSelection();
+  if (!store.allBots) await syncActiveBot();
   loadFiles();
 }
 
@@ -210,6 +220,7 @@ export async function detachBot(appId, profileId) {
   await apiDelete(`/api/apps/${appId}/bots/${profileId}`);
   await loadApps();
   ensureActiveBot();
+  await syncActiveBot();
   await loadFiles();
 }
 
