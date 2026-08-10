@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { store } from '../store';
+import { store, PAGE_SIZE } from '../store';
 import { loadFiles, loadStatus, loadProfiles, loadFolders, pageItems, totalPages, folderPath, folderChildren, folderById, openFolder, createFolder, clearSelection } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import TopBar from '../components/TopBar.vue';
@@ -26,7 +26,12 @@ async function init() {
 }
 onMounted(init);
 
-function openPreview(idx) { store.current = idx; showPreview.value = true; }
+// idx dari FileGrid/FileTable = index di HALAMAN ini (pageItems) —
+// konversi ke index store.filtered biar preview & nav tidak salah file
+function openPreview(idx) {
+  store.current = store.page * PAGE_SIZE + idx;
+  showPreview.value = true;
+}
 
 function pageUp() { if (store.page < totalPages.value - 1) store.page++; }
 function pageDown() { if (store.page > 0) store.page--; }

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, isVideo, isImage } from '../store';
 import { apiPost } from '../composables/useApi';
@@ -11,6 +11,9 @@ import ShareDialog from './ShareDialog.vue';
 const emit = defineEmits(['close']);
 const showShare = ref(false);
 const videoRef = ref(null);
+const rootRef = ref(null);
+
+onMounted(() => { rootRef.value?.focus(); });
 
 const file = computed(() => store.filtered[store.current] || null);
 
@@ -49,11 +52,11 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
 </script>
 
 <template>
-  <div v-if="file" class="fixed inset-0 z-[100]" @keydown="onKey" tabindex="-1">
+  <div v-if="file" ref="rootRef" class="fixed inset-0 z-[100] outline-none" @keydown="onKey" tabindex="-1">
     <div class="modal-backdrop" @click="close"></div>
 
     <div class="absolute inset-0 z-[100] flex items-center justify-center flex-col p-2 sm:p-5 pointer-events-none">
-      <button class="nav prev" @click="nav(-1)">‹</button>
+      <button class="nav prev pointer-events-auto" @click="nav(-1)">‹</button>
 
       <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">
         <video v-if="isVideo(file)" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash)" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" />
@@ -61,7 +64,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
         <div v-else class="text-[52px] text-center p-8 bg-card rounded-xl2 border border-line">{{ iconFor(file.filename) }}</div>
       </div>
 
-      <button class="nav next" @click="nav(1)">›</button>
+      <button class="nav next pointer-events-auto" @click="nav(1)">›</button>
 
       <div class="mt-3.5 text-center text-txt-dim text-[13px] max-w-[90vw] pointer-events-auto">
         <span class="font-semibold text-txt">{{ file.filename }}</span>
