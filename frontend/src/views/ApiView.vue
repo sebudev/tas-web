@@ -6,6 +6,7 @@ import { apiGet, apiPost, apiDelete } from '../composables/useApi';
 import { loadProfiles, loadApps, switchApp, currentAppBots } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import SelectMenu from '../components/SelectMenu.vue';
 
 const router = useRouter();
 const tokens = ref([]);
@@ -23,6 +24,15 @@ const appBots = computed(() => currentAppBots());
 const selApp = computed(() => store.apps.find((a) => a.id === store.currentApp));
 const locationOrigin = location.origin;
 
+const appOptions = computed(() => store.apps.map((a) => ({
+  value: a.id,
+  label: `📦 ${a.name} (${a.botCount || 0})`,
+})));
+const botOpts = computed(() => appBots.value.map((p) => ({
+  value: p.id,
+  label: `${p.initialized ? '🤖' : '📦'} ${p.name}${p.botUsername ? ' (@' + p.botUsername + ')' : ''}`,
+})));
+
 async function loadTokens() {
   try {
     const q = store.currentApp ? `?appId=${store.currentApp}` : '';
@@ -31,9 +41,9 @@ async function loadTokens() {
   } catch { /* ignore */ }
 }
 
-async function onSwitchApp(e) {
-  if (e.target.value) {
-    await switchApp(Number(e.target.value));
+async function onSwitchApp(v) {
+  if (v) {
+    await switchApp(Number(v));
     botTarget.value = null;
     loadTokens();
   }
@@ -166,14 +176,14 @@ onMounted(async () => {
 
     <main class="px-3 md:px-6 py-5 max-w-[1600px] mx-auto">
       <div class="flex flex-wrap items-center gap-2 my-4">
-        <select :value="store.currentApp" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none" @change="onSwitchApp">
-          <option v-for="a in store.apps" :key="a.id" :value="a.id">📦 {{ a.name }} ({{ a.botCount || 0 }})</option>
-        </select>
-        <select v-model="botTarget" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none">
-          <option v-for="p in appBots" :key="p.id" :value="p.id">
-            {{ p.initialized ? '🤖' : '📦' }} {{ p.name }}{{ p.botUsername ? ' (@' + p.botUsername + ')' : '' }}
-          </option>
-        </select>
+        <SelectMenu
+          :model-value="store.currentApp"
+          :options="appOptions"
+          placeholder="Pilih app"
+          title="Pilih app"
+          @update:model-value="onSwitchApp"
+        />
+        <SelectMenu v-model="botTarget" :options="botOpts" placeholder="Pilih bot target" title="Bot target token" />
         <input v-model="tokName" class="flex-1 min-w-[140px] px-3.5 py-2.5 rounded-[10px] border border-line bg-bg-2 text-txt text-[13px] outline-none focus:border-accent" placeholder="Nama token (mis. xbook-web)" />
         <button class="btn" @click="create">➕ Buat Token</button>
       </div>
@@ -206,11 +216,7 @@ onMounted(async () => {
         <h3 class="text-sm mb-1">🗄 S3 gateway credentials</h3>
         <div class="text-[11.5px] text-txt-dim mb-3">Akses storage via protokol S3 (rclone / s3cmd / aws cli). 1 bot = 1 bucket. Endpoint: <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">{{ locationOrigin }}/s3</code></div>
         <div class="flex flex-wrap items-center gap-2 mb-3">
-          <select v-model="s3BotTarget" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none">
-            <option v-for="p in appBots" :key="p.id" :value="p.id">
-              {{ p.initialized ? '🤖' : '📦' }} {{ p.name }}{{ p.botUsername ? ' (@' + p.botUsername + ')' : '' }}
-            </option>
-          </select>
+          <SelectMenu v-model="s3BotTarget" :options="botOpts" placeholder="Pilih bot" title="Bot utk kredensial S3" />
           <button class="btn" @click="createS3">🔑 Buat Kredensial</button>
         </div>
 
