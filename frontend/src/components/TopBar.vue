@@ -7,9 +7,11 @@ import { loadProfiles, loadApps, switchApp, selectBot, deleteProfile, currentApp
 import { apiPost } from '../composables/useApi';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import { promptDialog } from '../composables/usePrompt';
 import BotDialog from './BotDialog.vue';
 import AppDialog from './AppDialog.vue';
 import DashboardModal from './DashboardModal.vue';
+import SelectMenu from './SelectMenu.vue';
 
 const router = useRouter();
 const showBotDlg = ref(false);
@@ -19,26 +21,43 @@ const themeIcon = computed(() => (document.documentElement.dataset.theme === 'li
 const activeProfile = computed(() => store.profiles.find((p) => p.id === store.activeId));
 const appBots = computed(() => currentAppBots());
 
+const appOptions = computed(() => store.apps.map((a) => ({
+  value: a.id,
+  label: `📦 ${a.name} (${a.botCount || 0})`,
+})));
+
+const botOptions = computed(() => {
+  const opts = appBots.value.map((p) => ({
+    value: p.id,
+    label: `${p.initialized ? '🤖' : '📦'} ${p.name}${p.botUsername ? ' (@' + p.botUsername + ')' : ''}`,
+  }));
+  if (appBots.value.length > 1) opts.unshift({ value: 'all', label: '🗂 Semua Bot' });
+  return opts;
+});
+
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('tasTheme', next);
 }
 
-async function onSwitchApp(e) {
-  if (e.target.value) await switchApp(Number(e.target.value));
+async function onSwitchApp(v) {
+  if (v) await switchApp(Number(v));
 }
 
-function onSelectBot(e) {
-  const v = e.target.value;
+function onSelectBot(v) {
   if (v === 'all') selectBot('all');
   else if (v) selectBot(Number(v));
 }
 
 async function onNewApp() {
-  const name = prompt('Nama app baru:');
-  if (!name || !name.trim()) return;
-  try { await createApp(name.trim()); toast('📦 App "' + name.trim() + '" dibuat', 'ok'); }
+  const name = await promptDialog({
+    title: '📦 App baru',
+    placeholder: 'Nama app (mis. Produk A)',
+    okText: 'Buat',
+  });
+  if (!name) return;
+  try { await createApp(name); toast('📦 App "' + name + '" dibuat', 'ok'); }
   catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 
@@ -69,29 +88,24 @@ async function logout() {
     </div>
 
     <!-- App selector -->
-    <select
-      class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2 text-[13px] text-txt outline-none"
-      :value="store.currentApp"
-      @change="onSwitchApp"
+    <SelectMenu
+      :model-value="store.currentApp"
+      :options="appOptions"
+      placeholder="Pilih app"
       title="Pilih app"
-    >
-      <option v-for="a in store.apps" :key="a.id" :value="a.id">📦 {{ a.name }} ({{ a.botCount || 0 }})</option>
-    </select>
+      @update:model-value="onSwitchApp"
+    />
     <button class="btn-ghost" title="Kelola app (rename, bot, hapus)" @click="showAppDlg = true">⚙️</button>
     <button class="btn-ghost" title="Buat app baru" @click="onNewApp">➕</button>
 
     <!-- Bot selector (dalam app) -->
-    <select
-      class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2 text-[13px] text-txt outline-none"
-      :value="store.allBots ? 'all' : store.activeId"
-      @change="onSelectBot"
+    <SelectMenu
+      :model-value="store.allBots ? 'all' : store.activeId"
+      :options="botOptions"
+      placeholder="Pilih bot"
       title="Switch storage bot"
-    >
-      <option v-if="appBots.length > 1" value="all">{{ store.allBots ? '✓ ' : '' }}🗂 Semua Bot</option>
-      <option v-for="p in appBots" :key="p.id" :value="p.id">
-        {{ p.initialized ? '🤖' : '📦' }} {{ p.name }}{{ p.botUsername ? ' (@' + p.botUsername + ')' : '' }}{{ !store.allBots && p.id === store.activeId ? ' ✓' : '' }}
-      </option>
-    </select>
+      @update:model-value="onSelectBot"
+    />
     <button class="btn-ghost" title="Tambah bot" @click="showBotDlg = true">➕</button>
     <button v-if="store.profiles.length > 1 && !store.allBots" class="btn-ghost" title="Hapus bot" @click="onDeleteBot">🗑</button>
 

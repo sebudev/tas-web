@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { store, PAGE_SIZE } from '../store';
 import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, folderById, openFolder, createFolder, clearSelection } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { promptDialog } from '../composables/usePrompt';
 import TopBar from '../components/TopBar.vue';
 import Toolbar from '../components/Toolbar.vue';
 import DropZone from '../components/DropZone.vue';
@@ -48,11 +49,15 @@ function onCloseMove() {
 }
 
 async function onNewFolder() {
-  const name = prompt('Nama folder baru:');
-  if (!name || !name.trim()) return;
+  const name = await promptDialog({
+    title: '📁 Folder baru',
+    placeholder: 'Nama folder',
+    okText: 'Buat',
+  });
+  if (!name) return;
   try {
-    await createFolder(name.trim(), null);
-    toast('📁 Folder "' + name.trim() + '" dibuat', 'ok');
+    await createFolder(name, null);
+    toast('📁 Folder "' + name + '" dibuat', 'ok');
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 

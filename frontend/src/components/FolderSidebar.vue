@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { store } from '../store';
 import { folderChildren, folderById, openFolder, createFolder, renameFolder, deleteFolder } from '../composables/useApp';
 import { confirmDialog } from '../composables/useConfirm';
+import { promptDialog } from '../composables/usePrompt';
 import { toast } from '../composables/useToast';
 import FolderSidebar from './FolderSidebar.vue';
 
@@ -20,19 +21,28 @@ function toggleExpand(id) {
 
 async function onCreate() {
   const parent = props.parentId ? folderById(props.parentId) : null;
-  const name = prompt(parent ? `Nama subfolder di "${parent.name}":` : 'Nama folder baru:');
-  if (!name || !name.trim()) return;
+  const name = await promptDialog({
+    title: parent ? `📁 Subfolder di "${parent.name}"` : '📁 Folder baru',
+    placeholder: 'Nama folder',
+    okText: 'Buat',
+  });
+  if (!name) return;
   try {
-    await createFolder(name.trim(), props.parentId);
+    await createFolder(name, props.parentId);
     if (props.parentId) store.expandedFolders.add(props.parentId);
-    toast('📁 Folder "' + name.trim() + '" dibuat', 'ok');
+    toast('📁 Folder "' + name + '" dibuat', 'ok');
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 
 async function onRename(f) {
-  const name = prompt('Nama baru untuk "' + f.name + '":', f.name);
-  if (!name || !name.trim() || name.trim() === f.name) return;
-  try { await renameFolder(f.id, name.trim()); toast('Folder di-rename', 'ok'); }
+  const name = await promptDialog({
+    title: `✏️ Ganti nama "${f.name}"`,
+    placeholder: 'Nama folder',
+    initial: f.name,
+    okText: 'Simpan',
+  });
+  if (!name || name === f.name) return;
+  try { await renameFolder(f.id, name); toast('Folder di-rename', 'ok'); }
   catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 

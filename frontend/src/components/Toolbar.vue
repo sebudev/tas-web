@@ -4,6 +4,8 @@ import { store } from '../store';
 import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import { promptDialog } from '../composables/usePrompt';
+import SelectMenu from './SelectMenu.vue';
 
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
@@ -21,7 +23,12 @@ function toggleView() {
 }
 
 async function onUrl() {
-  const url = prompt('URL file yang mau di-upload (server yang download):');
+  const url = await promptDialog({
+    title: '🔗 Upload dari URL',
+    message: 'Server yang akan mendownload filenya (bukan browser kamu).',
+    placeholder: 'https://...',
+    okText: '⬇ Download',
+  });
   if (url) await uploadUrl(url);
 }
 
@@ -44,6 +51,19 @@ async function onDeleteMulti() {
 function onZip() {
   if (store.allBots) return toast('ZIP belum didukung di view "Semua Bot" — pilih satu bot dulu', 'err');
   if (store.selected.size) emit('zip', [...store.selected]);
+}
+
+const sortOptions = [
+  { value: 'new', label: '🕒 Terbaru' },
+  { value: 'old', label: '⏳ Terlama' },
+  { value: 'name', label: '🔤 Nama A-Z' },
+  { value: 'size-d', label: '📦 Ukuran terbesar' },
+  { value: 'size-a', label: '📉 Ukuran terkecil' },
+];
+
+function onSort(v) {
+  store.sort = v;
+  applyFilters();
 }
 
 function toggleSelectMode() {
@@ -69,13 +89,12 @@ function toggleSelectMode() {
 
     <input v-model="store.search" class="flex-1 min-w-[160px] px-4 py-2.5 rounded-[10px] border border-line bg-bg-2 text-txt text-sm outline-none focus:border-accent" type="search" placeholder="Cari file..." @input="store.page = 0; applyFilters()" />
 
-    <select v-model="store.sort" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none" @change="applyFilters">
-      <option value="new">Terbaru</option>
-      <option value="old">Terlama</option>
-      <option value="name">Nama A-Z</option>
-      <option value="size-d">Ukuran terbesar</option>
-      <option value="size-a">Ukuran terkecil</option>
-    </select>
+    <SelectMenu
+      :model-value="store.sort"
+      :options="sortOptions"
+      title="Urutkan file"
+      @update:model-value="onSort"
+    />
   </div>
 </template>
 
