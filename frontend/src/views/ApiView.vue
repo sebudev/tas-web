@@ -13,9 +13,15 @@ const tokName = ref('');
 const newToken = ref('');
 const copiedId = ref(null);
 const botTarget = ref(null);
+// S3
+const s3Creds = ref([]);
+const s3BotTarget = ref(null);
+const s3New = ref(null); // kredensial yang baru dibuat (tampil sekali)
+const s3ShowSecret = ref({});
 
 const appBots = computed(() => currentAppBots());
 const selApp = computed(() => store.apps.find((a) => a.id === store.currentApp));
+const locationOrigin = location.origin;
 
 async function loadTokens() {
   try {
@@ -92,10 +98,62 @@ async function del(id) {
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 
+// ---------- S3 gateway credentials ----------
+async function loadS3() {
+  try {
+    const data = await apiGet('/api/s3');
+    s3Creds.value = data.creds || [];
+  } catch { /* ignore */ }
+}
+
+async function createS3() {
+  const pid = s3BotTarget.value;
+  if (!pid) return toast('Pilih bot dulu', 'err');
+  try {
+    const data = await apiPost('/api/s3/creds', { profileId: pid });
+    s3New.value = data;
+    await copyText(data.secretKey);
+    toast('Kredensial S3 dibuat & secret disalin!', 'ok');
+    loadS3();
+  } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+
+async function delS3(id) {
+  const ok = await confirmDialog({
+    title: 'Hapus kredensial S3?',
+    message: 'Hapus kredensial ini?\n\nKlien S3 yang memakainya langsung tidak bisa akses (403).',
+    confirmText: 'Hapus',
+  });
+  if (!ok) return;
+  try {
+    await apiDelete('/api/s3/creds/' + id);
+    if (s3New.value && s3New.value.id === id) s3New.value = null;
+    toast('Kredensial dihapus', 'ok');
+    loadS3();
+  } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+
+function rcloneConfig(c) {
+  return `[tas-${c.profile_name || 'bot'}]
+type = s3
+provider = Other
+endpoint = ${location.origin}/s3
+access_key = ${c.access_key}
+secret_key = ${c.secret_key}
+force_path_style = true`;
+}
+
+function s3Bucket(c) {
+  // bucket dihitung server; tampilkan dari data creds kalau ada, else "bot-<id>"
+  return c.bucket || ('bot-' + c.profile_id);
+}
+
 onMounted(async () => {
   await Promise.all([loadProfiles(), loadApps()]);
   if (!botTarget.value && appBots.value.length) botTarget.value = appBots.value[0].id;
+  if (!s3BotTarget.value && appBots.value.length) s3BotTarget.value = appBots.value[0].id;
   loadTokens();
+  loadS3();
 });
 </script>
 
@@ -141,6 +199,35 @@ onMounted(async () => {
             <div class="text-[11px] text-txt-dim">Bot: {{ t.profile_name || '—' }} · App: {{ t.app_name || '—' }} · dibuat {{ fmtDateTime(t.created_at) }} · terakhir dipakai {{ t.last_used_at ? fmtDateTime(t.last_used_at) : '—' }}</div>
           </div>
           <button class="text-xs px-2.5 py-1 rounded-lg bg-red-500/10 text-red-500 border border-red-500/40 hover:brightness-125 self-start sm:self-auto" @click="del(t.id)">🗑 Hapus</button>
+        </div>
+      </div>
+
+      <div class="bg-card border border-line rounded-xl2 p-4 mt-3.5">
+        <h3 class="text-sm mb-1">🗄 S3 gateway credentials</h3>
+        <div class="text-[11.5px] text-txt-dim mb-3">Akses storage via protokol S3 (rclone / s3cmd / aws cli). 1 bot = 1 bucket. Endpoint: <code class="bg-black/10 border border-line rounded-md px-1.5 py-0.5 text-[11px]">{{ locationOrigin }}/s3</code></div>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <select v-model="s3BotTarget" class="bg-bg-2 border border-line rounded-[10px] px-2.5 py-2.5 text-[13px] text-txt outline-none">
+            <option v-for="p in appBots" :key="p.id" :value="p.id">
+              {{ p.initialized ? '🤖' : '📦' }} {{ p.name }}{{ p.botUsername ? ' (@' + p.botUsername + ')' : '' }}
+            </option>
+          </select>
+          <button class="btn" @click="createS3">🔑 Buat Kredensial</button>
+        </div>
+
+        <div v-if="s3New" class="bg-emerald-500/10 border border-emerald-500/50 text-emerald-500 rounded-[10px] p-3 text-[12px] mb-3 font-mono break-all">
+          ✅ Kredensial baru (secret sudah disalin ke clipboard — simpan sekarang, hanya tampil sekali):<br>
+          bucket: <b>{{ s3New.bucket }}</b> · access: <b>{{ s3New.accessKey }}</b> · secret: <b>{{ s3New.secretKey }}</b>
+          <pre class="mt-2 bg-black/30 rounded-lg p-2.5 text-[11px] overflow-x-auto">{{ rcloneConfig(s3New) }}</pre>
+        </div>
+
+        <div v-if="!s3Creds.length" class="text-txt-dim text-[13px] py-2">Belum ada kredensial S3.</div>
+        <div v-for="c in s3Creds" :key="c.id" class="py-2.5 border-b border-line last:border-0 flex flex-col sm:flex-row sm:items-center gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-[13px]">🤖 {{ c.profile_name || '—' }} <span class="text-txt-dim font-normal">· bucket <code class="text-[11px] bg-bg-2 border border-line rounded px-1">{{ s3Bucket(c) }}</code></span></div>
+            <div class="text-[11px] text-txt-dim font-mono">access: {{ c.access_key }}</div>
+          </div>
+          <button class="text-xs px-2.5 py-1 rounded-lg bg-bg-2 border border-line text-txt-dim hover:border-accent hover:text-accent self-start sm:self-auto" @click="copyText(c.access_key)">📋 Salin Key</button>
+          <button class="text-xs px-2.5 py-1 rounded-lg bg-red-500/10 text-red-500 border border-red-500/40 hover:brightness-125 self-start sm:self-auto" @click="delS3(c.id)">🗑 Hapus</button>
         </div>
       </div>
 
