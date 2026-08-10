@@ -2,7 +2,8 @@
 import { ref } from 'vue';
 import { apiPost, apiGet } from '../composables/useApi';
 import { toast } from '../composables/useToast';
-import { loadProfiles, switchProfile, loadFiles, loadStatus } from '../composables/useApp';
+import { store } from '../store';
+import { loadProfiles, loadApps, switchProfile, loadFiles, loadStatus } from '../composables/useApp';
 
 const emit = defineEmits(['close']);
 const name = ref('');
@@ -18,7 +19,7 @@ async function create() {
   busy.value = true;
   progress.value = 'Membuat profile...';
   try {
-    const prof = await apiPost('/api/profiles', { name: name.value });
+    const prof = await apiPost('/api/profiles', { name: name.value, appId: store.currentApp || undefined });
     progress.value = 'Init: menghubungkan ke Telegram...';
     await apiPost('/api/profiles/' + prof.id + '/init', { token: token.value, password: pass.value });
     let tries = 0;
@@ -33,6 +34,7 @@ async function create() {
         } else if (st.status === 'done') {
           clearInterval(poll);
           progress.value = '✅ ' + (st.message || 'Tersambung');
+          await loadApps(); // refresh app (bot baru sudah ter-attach)
           await switchProfile(prof.id);
           toast('Bot baru aktif! 🎉', 'ok');
           setTimeout(() => { emit('close'); }, 1000);

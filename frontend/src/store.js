@@ -23,6 +23,10 @@ export const store = reactive({
   // bots
   profiles: [],
   activeId: null,
+  // apps (workspace: grup bot + api keys)
+  apps: [],
+  currentApp: null,   // id app yang sedang dibuka
+  allBots: false,     // view "Semua Bot" (gabungan file dari semua bot di app)
   // folders (virtual, model Google Drive)
   folders: [],        // [{id,name,parentId,createdAt,fileCount}]
   fileFolder: {},     // hash -> folderId (file di root = tidak ada entry)

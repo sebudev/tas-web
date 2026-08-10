@@ -37,6 +37,7 @@ function onCheck(f, e) {
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">File</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Ukuran</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Folder</th>
+          <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Bot</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Tanggal</th>
           <th class="px-3.5 py-3 text-[11px] uppercase tracking-wide text-txt-dim border-b border-line">Tag</th>
         </tr>
@@ -63,6 +64,10 @@ function onCheck(f, e) {
           <td class="px-3.5 py-2.5 border-b border-line align-middle">{{ fmtBytes(f.original_size) }}</td>
           <td class="px-3.5 py-2.5 border-b border-line align-middle">
             <span v-if="folderOf(f.hash)" class="text-[11px] text-txt-dim whitespace-nowrap">📁 {{ folderOf(f.hash).name }}</span>
+            <span v-else class="text-[11px] text-txt-dim/50">—</span>
+          </td>
+          <td class="px-3.5 py-2.5 border-b border-line align-middle">
+            <span v-if="f.profileName" class="text-[11px] text-txt-dim whitespace-nowrap">🤖 {{ f.profileName }}</span>
             <span v-else class="text-[11px] text-txt-dim/50">—</span>
           </td>
           <td class="px-3.5 py-2.5 border-b border-line align-middle">{{ fmtDate(f.created_at) }}</td>

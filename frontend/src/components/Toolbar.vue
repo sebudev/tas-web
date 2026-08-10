@@ -42,6 +42,7 @@ async function onDeleteMulti() {
 }
 
 function onZip() {
+  if (store.allBots) return toast('ZIP belum didukung di view "Semua Bot" — pilih satu bot dulu', 'err');
   if (store.selected.size) emit('zip', [...store.selected]);
 }
 

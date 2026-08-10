@@ -45,6 +45,10 @@ const folder = computed(() => (store.fileFolder[props.file.hash] ? folderById(st
       <span class="bg-black/5 border border-line rounded-full px-2 py-0.5 text-txt-dim truncate max-w-full">📁 {{ folder.name }}</span>
     </div>
 
+    <div v-if="file.profileName" class="flex items-center gap-1 text-[10px]">
+      <span class="bg-black/5 border border-line rounded-full px-2 py-0.5 text-txt-dim truncate max-w-full">🤖 {{ file.profileName }}</span>
+    </div>
+
     <div v-if="tags" class="flex flex-wrap gap-1 text-[10px] text-txt-dim">
       <span v-for="t in file.tags" :key="t" class="bg-black/5 border border-line rounded-full px-2 py-0.5">#{{ t }}</span>
     </div>
