@@ -118,6 +118,21 @@ rclone deletefile tas:default/notes.txt
 
 File yang di-upload via S3 langsung muncul di web UI (satu storage terpadu).
 
+### Presigned URL
+
+Buat link download sementara tanpa kredensial (AWS-style, SigV4 query auth):
+
+```bash
+# butuh login web / API token; token hanya bisa presign bucket bot-nya sendiri
+curl -X POST http://localhost:8001/api/s3/presign \
+  -H "Authorization: Bearer <API_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"bucket":"general","key":"file.mp4","expires":3600}'
+# → {"ok":true,"url":"http://.../s3/general/file.mp4?X-Amz-Algorithm=...&X-Amz-Signature=...","expiresIn":3600}
+```
+
+- Link **kadaluarsa otomatis** (`expires` 1..604800 detik, maks 7 hari) & hanya untuk GET
+- Tanpa kredensial di URL yang dibagikan — aman dikirim ke orang lain / dipakai streaming (HTTP Range didukung)
+
 ## 🔌 Integrasi dengan aplikasi lain
 
 Kirim header `Authorization: Bearer <API_TOKEN>` pada semua panggilan API
