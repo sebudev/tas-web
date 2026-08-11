@@ -1424,28 +1424,50 @@ function verifySigV4(req, secret) {
   const canonicalQuery = pairs.map((p) => awsUriEncode(p.k) + '=' + awsUriEncode(p.v)).join('&');
 
   const signedHeaders = signedHeadersStr.split(';').map((h) => h.trim().toLowerCase());
-  let canonicalHeaders = '';
-  for (const h of signedHeaders) {
-    const val = req.headers[h];
-    if (val == null) return { ok: false, code: 'InvalidArgument', msg: 'Signed header tidak ada: ' + h };
-    canonicalHeaders += h + ':' + String(val).trim().replace(/\s+/g, ' ') + '\n';
-  }
   // presigned: payload hash selalu UNSIGNED-PAYLOAD (konvensi S3);
   // header mode: dari x-amz-content-sha256, fallback hash string kosong
   const payloadHash = presigned ? 'UNSIGNED-PAYLOAD' : (req.headers['x-amz-content-sha256'] ||
     'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
-  const canonicalRequest = [req.method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n');
+
   const scope = `${dateStamp}/${region}/s3/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
-  let k = hmac('AWS4' + secret, dateStamp);
-  k = hmac(k, region);
-  k = hmac(k, 's3');
-  k = hmac(k, 'aws4_request');
-  const expect = hmac(k, stringToSign).toString('hex');
-  const ok = expect.length === signature.length &&
-    crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(signature));
-  return ok ? { ok: true } : { ok: false, code: 'SignatureDoesNotMatch', msg: 'Signature tidak cocok' };
+  // hitung & bandingkan signature utk satu varian canonical headers
+  const check = (canonicalHeaders) => {
+    const canonicalRequest = [req.method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n');
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+      crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+    let k = hmac('AWS4' + secret, dateStamp);
+    k = hmac(k, region);
+    k = hmac(k, 's3');
+    k = hmac(k, 'aws4_request');
+    const expect = hmac(k, stringToSign).toString('hex');
+    return expect.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(signature));
+  };
+
+  // pass 1: canonical headers dari nilai header PERSIS seperti diterima
+  let canonicalHeaders = '';
+  for (const h of signedHeaders) {
+    let val = req.headers[h];
+    if (val == null) {
+      // accept-encoding sering di-strip/rewrite proxy (Cloudflare/nginx) —
+      // SDK menandatangani nilai 'identity', jadi header yang hilang dianggap identity
+      if (h === 'accept-encoding') val = 'identity';
+      else return { ok: false, code: 'InvalidArgument', msg: 'Signed header tidak ada: ' + h };
+    }
+    canonicalHeaders += h + ':' + String(val).trim().replace(/\s+/g, ' ') + '\n';
+  }
+  if (check(canonicalHeaders)) return { ok: true };
+
+  // pass 2 (header auth saja): proxy (Cloudflare/nginx) mengubah nilai accept-encoding
+  // (mis. → gzip/br) padahal SDK (Go) menandatangani 'identity'. Normalisasi → verifikasi ulang.
+  // Catatan: format canonical header SigV4 = name:value TANPA spasi setelah colon.
+  // Aman: signature tetap harus valid — butuh secret key; nilai accept-encoding tidak membawa hak akses.
+  if (!presigned && signedHeaders.includes('accept-encoding') && !/^accept-encoding:identity\n/m.test(canonicalHeaders)) {
+    const alt = canonicalHeaders.replace(/^accept-encoding:.*$/m, 'accept-encoding:identity');
+    if (check(alt)) return { ok: true };
+  }
+
+  return { ok: false, code: 'SignatureDoesNotMatch', msg: 'Signature tidak cocok' };
 }
 
 // parse X-Amz-Date (YYYYMMDDTHHMMSSZ, UTC) → epoch ms; null kalau format salah
