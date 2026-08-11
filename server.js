@@ -1286,6 +1286,57 @@ function profileForBucket(bucket) {
   return null;
 }
 
+// ---------------- presigned URL (SigV4 query auth) ----------------
+// URL download sementara tanpa kredensial — aman dibagikan, kadaluarsa otomatis (AWS-style)
+
+function presignUrl(req, cred, prof, key, expires) {
+  const now = new Date();
+  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z/, 'Z');
+  const region = 'us-east-1';
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const host = req.headers.host || 'localhost:8001';
+  const bucket = bucketForProfile(prof);
+  // path yang ditandatangani = path lengkap request, termasuk prefix /s3
+  const path = '/s3/' + bucket + '/' + key.split('/').map(awsUriEncode).join('/');
+  const qp = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': cred.access_key + '/' + scope,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expires),
+    'X-Amz-SignedHeaders': 'host',
+  };
+  const canonicalQuery = Object.keys(qp).sort()
+    .map((k) => awsUriEncode(k) + '=' + awsUriEncode(qp[k])).join('&');
+  const canonicalRequest = ['GET', path, canonicalQuery, 'host:' + host + '\n', 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+  let k = hmac('AWS4' + cred.secret_key, dateStamp);
+  k = hmac(k, region);
+  k = hmac(k, 's3');
+  k = hmac(k, 'aws4_request');
+  const signature = hmac(k, stringToSign).toString('hex');
+  return `http://${host}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+// buat presigned URL (butuh login web / API token; token hanya bisa presign bucket bot-nya sendiri)
+app.post('/api/s3/presign', (req, res) => {
+  const ctx = als.getStore() || {};
+  const { bucket, key, expires } = req.body || {};
+  const exp = parseInt(expires, 10) || 3600;
+  if (!bucket || !key) return res.status(400).json({ error: 'bucket dan key wajib diisi' });
+  if (!(exp >= 1 && exp <= 604800)) return res.status(400).json({ error: 'expires harus 1..604800 detik' });
+  const prof = profileForBucket(bucket);
+  if (!prof) return res.status(404).json({ error: 'Bucket tidak ditemukan' });
+  if (ctx.profile && ctx.profile.id !== prof.id) {
+    return res.status(403).json({ error: 'Token ini tidak punya akses ke bucket ' + bucket });
+  }
+  const cred = db.prepare('SELECT * FROM s3_creds WHERE profile_id=?').get(prof.id);
+  if (!cred) return res.status(404).json({ error: 'Kredensial S3 utk bot ini belum dibuat (buat di halaman API)' });
+  const url = presignUrl(req, cred, prof, key, exp);
+  res.json({ ok: true, url, method: 'GET', bucket, key, expiresIn: exp });
+});
+
 function xmlEscape(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
@@ -1315,14 +1366,42 @@ function mimeType(name) {
 
 function hmac(key, data) { return crypto.createHmac('sha256', key).update(data).digest(); }
 
-// Verifikasi AWS Signature v4 (header auth). Kembalian {ok} atau {ok:false, code, msg}.
+// Verifikasi AWS Signature v4. Dukung 2 mode:
+//  - header:  Authorization: AWS4-HMAC-SHA256 Credential=AKID/date/region/s3/aws4_request, ...
+//  - presigned URL: X-Amz-Algorithm/Credential/Date/Expires/SignedHeaders/Signature di query string
 function verifySigV4(req, secret) {
-  const auth = req.headers.authorization || '';
-  const m = auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([0-9a-f]{64})$/i);
-  if (!m) return { ok: false, code: 'InvalidArgument', msg: 'Authorization header tidak valid' };
-  const [, , dateStamp, region, signedHeadersStr, signature] = m;
-  const amzDate = req.headers['x-amz-date'];
-  if (!amzDate) return { ok: false, code: 'InvalidArgument', msg: 'Header x-amz-date wajib ada' };
+  const presigned = !!req.query['X-Amz-Algorithm'];
+  let dateStamp, region, signedHeadersStr, signature, amzDate;
+  if (presigned) {
+    const credParts = String(req.query['X-Amz-Credential'] || '').split('/');
+    dateStamp = credParts[1] || '';
+    region = credParts[2] || '';
+    signedHeadersStr = String(req.query['X-Amz-SignedHeaders'] || '');
+    signature = String(req.query['X-Amz-Signature'] || '');
+    amzDate = String(req.query['X-Amz-Date'] || '');
+    const expires = parseInt(req.query['X-Amz-Expires'], 10);
+    if (!(expires >= 1 && expires <= 604800)) {
+      return { ok: false, code: 'AuthorizationQueryParametersError', msg: 'X-Amz-Expires harus 1..604800 detik' };
+    }
+    const issued = parseAmzDate(amzDate);
+    if (!issued) return { ok: false, code: 'AccessDenied', msg: 'X-Amz-Date tidak valid' };
+    if (Date.now() > issued + expires * 1000) return { ok: false, code: 'AccessDenied', msg: 'Request has expired' };
+    if (Date.now() < issued - 15 * 60 * 1000) return { ok: false, code: 'AccessDenied', msg: 'Request is not yet valid' };
+    if (signedHeadersStr !== 'host') {
+      return { ok: false, code: 'AuthorizationQueryParametersError', msg: 'Presigned URL hanya support signed header "host"' };
+    }
+  } else {
+    const auth = req.headers.authorization || '';
+    const m = auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([0-9a-f]{64})$/i);
+    if (!m) return { ok: false, code: 'InvalidArgument', msg: 'Authorization header tidak valid' };
+    const amzDateHdr = req.headers['x-amz-date'];
+    if (!amzDateHdr) return { ok: false, code: 'InvalidArgument', msg: 'Header x-amz-date wajib ada' };
+    amzDate = amzDateHdr;
+    dateStamp = m[2];
+    region = m[3];
+    signedHeadersStr = m[4];
+    signature = m[5];
+  }
 
   // canonical URI = path persis seperti dikirim (encoded), query di-sort & re-encode
   const raw = req.originalUrl;
@@ -1340,36 +1419,75 @@ function verifySigV4(req, secret) {
       }).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.v < b.v ? -1 : a.v > b.v ? 1 : 0));
     } catch { return { ok: false, code: 'InvalidArgument', msg: 'Query string tidak valid' }; }
   }
+  // presigned: parameter X-Amz-Signature TIDAK ikut dihitung
+  if (presigned) pairs = pairs.filter((p) => p.k !== 'X-Amz-Signature');
   const canonicalQuery = pairs.map((p) => awsUriEncode(p.k) + '=' + awsUriEncode(p.v)).join('&');
 
   const signedHeaders = signedHeadersStr.split(';').map((h) => h.trim().toLowerCase());
+  // presigned: payload hash selalu UNSIGNED-PAYLOAD (konvensi S3);
+  // header mode: dari x-amz-content-sha256, fallback hash string kosong
+  const payloadHash = presigned ? 'UNSIGNED-PAYLOAD' : (req.headers['x-amz-content-sha256'] ||
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  // hitung & bandingkan signature utk satu varian canonical headers
+  const check = (canonicalHeaders) => {
+    const canonicalRequest = [req.method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n');
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+      crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+    let k = hmac('AWS4' + secret, dateStamp);
+    k = hmac(k, region);
+    k = hmac(k, 's3');
+    k = hmac(k, 'aws4_request');
+    const expect = hmac(k, stringToSign).toString('hex');
+    return expect.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(signature));
+  };
+
+  // pass 1: canonical headers dari nilai header PERSIS seperti diterima
   let canonicalHeaders = '';
   for (const h of signedHeaders) {
-    const val = req.headers[h];
-    if (val == null) return { ok: false, code: 'InvalidArgument', msg: 'Signed header tidak ada: ' + h };
+    let val = req.headers[h];
+    if (val == null) {
+      // accept-encoding sering di-strip/rewrite proxy (Cloudflare/nginx) —
+      // SDK menandatangani nilai 'identity', jadi header yang hilang dianggap identity
+      if (h === 'accept-encoding') val = 'identity';
+      else return { ok: false, code: 'InvalidArgument', msg: 'Signed header tidak ada: ' + h };
+    }
     canonicalHeaders += h + ':' + String(val).trim().replace(/\s+/g, ' ') + '\n';
   }
-  // tanpa header x-amz-content-sha256 → body kosong (hash string kosong)
-  const payloadHash = req.headers['x-amz-content-sha256'] ||
-    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-  const canonicalRequest = [req.method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders.join(';'), payloadHash].join('\n');
-  const scope = `${dateStamp}/${region}/s3/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
-  let k = hmac('AWS4' + secret, dateStamp);
-  k = hmac(k, region);
-  k = hmac(k, 's3');
-  k = hmac(k, 'aws4_request');
-  const expect = hmac(k, stringToSign).toString('hex');
-  const ok = expect.length === signature.length &&
-    crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(signature));
-  return ok ? { ok: true } : { ok: false, code: 'SignatureDoesNotMatch', msg: 'Signature tidak cocok' };
+  if (check(canonicalHeaders)) return { ok: true };
+
+  // pass 2 (header auth saja): proxy (Cloudflare/nginx) mengubah nilai accept-encoding
+  // (mis. → gzip/br) padahal SDK (Go) menandatangani 'identity'. Normalisasi → verifikasi ulang.
+  // Catatan: format canonical header SigV4 = name:value TANPA spasi setelah colon.
+  // Aman: signature tetap harus valid — butuh secret key; nilai accept-encoding tidak membawa hak akses.
+  if (!presigned && signedHeaders.includes('accept-encoding') && !/^accept-encoding:identity\n/m.test(canonicalHeaders)) {
+    const alt = canonicalHeaders.replace(/^accept-encoding:.*$/m, 'accept-encoding:identity');
+    if (check(alt)) return { ok: true };
+  }
+
+  return { ok: false, code: 'SignatureDoesNotMatch', msg: 'Signature tidak cocok' };
+}
+
+// parse X-Amz-Date (YYYYMMDDTHHMMSSZ, UTC) → epoch ms; null kalau format salah
+function parseAmzDate(s) {
+  const m = String(s || '').match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  return isNaN(d.getTime()) ? null : d.getTime();
 }
 
 // middleware auth utk semua request /s3
+// 2 mode: (1) header Authorization SigV4 (rclone/SDK), (2) presigned URL (X-Amz-* di query string)
 app.use('/s3', (req, res, next) => {
-  const m = (req.headers.authorization || '').match(/Credential=([^/]+)\//);
-  const accessKey = m ? m[1] : '';
+  let accessKey = '';
+  if (req.query['X-Amz-Algorithm']) {
+    accessKey = String(req.query['X-Amz-Credential'] || '').split('/')[0] || '';
+  } else {
+    const m = (req.headers.authorization || '').match(/Credential=([^/]+)\//);
+    accessKey = m ? m[1] : '';
+  }
   const cred = accessKey ? db.prepare('SELECT * FROM s3_creds WHERE access_key=?').get(accessKey) : null;
   if (!cred) return s3Err(res, 403, 'InvalidAccessKeyId', 'Access key tidak dikenal');
   const v = verifySigV4(req, cred.secret_key);
