@@ -11,7 +11,10 @@ data/
 tmp/
 
 # build output frontend (dibangun ulang oleh Dockerfile)
-public/
+/public/
+# allow frontend public assets (favicon etc) — vite copies frontend/public/* → dist/*
+!frontend/public/
+!frontend/public/**
 
 # log & os
 *.log
