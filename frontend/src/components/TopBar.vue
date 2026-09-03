@@ -3,136 +3,43 @@ import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { fmtBytes } from '../store';
-import { loadProfiles, loadApps, switchApp, selectBot, deleteProfile, currentAppBots, createApp, loadStatus } from '../composables/useApp';
 import { apiPost } from '../composables/useApi';
-import { toast } from '../composables/useToast';
-import { confirmDialog } from '../composables/useConfirm';
-import { promptDialog } from '../composables/usePrompt';
+import { KeyRound, Moon, Sun, LayoutDashboard, LogOut } from '@lucide/vue';
 import BotDialog from './BotDialog.vue';
 import AppDialog from './AppDialog.vue';
 import DashboardModal from './DashboardModal.vue';
-import SelectMenu from './SelectMenu.vue';
 
 const router = useRouter();
 const showBotDlg = ref(false);
 const showAppDlg = ref(false);
 const showDash = ref(false);
-const themeIcon = computed(() => (document.documentElement.dataset.theme === 'light' ? '🌙' : '☀️'));
-const activeProfile = computed(() => store.profiles.find((p) => p.id === store.activeId));
-const appBots = computed(() => currentAppBots());
-
-const appOptions = computed(() => store.apps.map((a) => ({
-  value: a.id,
-  label: `📦 ${a.name} (${a.botCount || 0})`,
-})));
-
-const botOptions = computed(() => {
-  const opts = appBots.value.map((p) => ({
-    value: p.id,
-    label: `${p.initialized ? '🤖' : '📦'} ${p.name}${p.botUsername ? ' (@' + p.botUsername + ')' : ''}`,
-  }));
-  if (appBots.value.length > 1) opts.unshift({ value: 'all', label: '🗂 Semua Bot' });
-  return opts;
-});
+const isLight = computed(() => document.documentElement.dataset.theme === 'light');
 
 function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem('tasTheme', next);
+ const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+ document.documentElement.dataset.theme = next;
+ localStorage.setItem('tasTheme', next);
 }
-
-async function onSwitchApp(v) {
-  if (v) await switchApp(Number(v));
-}
-
-function onSelectBot(v) {
-  if (v === 'all') selectBot('all');
-  else if (v) selectBot(Number(v));
-}
-
-async function onNewApp() {
-  const name = await promptDialog({
-    title: '📦 App baru',
-    placeholder: 'Nama app (mis. Produk A)',
-    okText: 'Buat',
-  });
-  if (!name) return;
-  try { await createApp(name); toast('📦 App "' + name + '" dibuat', 'ok'); }
-  catch (e) { toast('Gagal: ' + e.message, 'err'); }
-}
-
-async function onDeleteBot() {
-  const p = activeProfile.value;
-  if (!p) return;
-  const ok = await confirmDialog({
-    title: 'Hapus bot?',
-    message: `Hapus bot "${p.name}" (@${p.botUsername || '?'})?\n\nFile di Telegram TIDAK dihapus — cuma profile-nya dilepas dari tas-web.`,
-    confirmText: 'Hapus Bot',
-  });
-  if (!ok) return;
-  await deleteProfile(p.id);
-}
-
-async function logout() {
-  await apiPost('/api/logout');
-  router.replace('/login');
-}
+async function logout() { await apiPost('/api/logout'); router.replace('/login'); }
 </script>
 
 <template>
-  <header class="sticky top-0 z-50 flex flex-wrap items-center gap-2 md:gap-4 px-3 md:px-6 py-3
-                 bg-bg/85 backdrop-blur-xl border-b border-line">
-    <div class="font-bold text-xl whitespace-nowrap">
-      <span class="text-accent-two">✦</span> tas
-      <span class="hidden sm:inline text-txt-dim font-normal text-sm">/ telegram storage</span>
-    </div>
+ <header class="h-[45px] shrink-0 flex items-center gap-1.5 px-3 border-b bg-white dark:bg-[#191919]" :style="{ borderColor: 'var(--border)' }">
+ <div class="hidden sm:flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border bg-[var(--bg)] dark:bg-[#1F1F1F]" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }">
+ <span class="w-1.5 h-1.5 rounded-full bg-[#2383E2] animate-pulse"></span>
+ {{ store.stats?.fileCount || 0 }} file · {{ fmtBytes(store.stats?.totalSize) }}
+ </div>
 
-    <!-- App selector -->
-    <SelectMenu
-      :model-value="store.currentApp"
-      :options="appOptions"
-      placeholder="Pilih app"
-      title="Pilih app"
-      @update:model-value="onSwitchApp"
-    />
-    <button class="btn-ghost" title="Kelola app (rename, bot, hapus)" @click="showAppDlg = true">⚙️</button>
-    <button class="btn-ghost" title="Buat app baru" @click="onNewApp">➕</button>
+ <div class="ml-auto flex items-center gap-1">
+ <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="API tokens" @click="router.push('/api')"><KeyRound :size="14" /></button>
+ <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="Ganti tema" @click="toggleTheme"><Moon v-if="isLight" :size="14" /><Sun v-else :size="14" /></button>
+ <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="Dashboard" @click="showDash = true"><LayoutDashboard :size="14" /></button>
+ <span class="hidden sm:inline text-[12px] font-medium px-2" :style="{ color: 'var(--text)' }">{{ store.user ? '@' + store.user.username : '' }}</span>
+ <button class="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-[6px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333]" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }" @click="logout"><LogOut :size="12" /> Keluar</button>
+ </div>
+ </header>
 
-    <!-- Bot selector (dalam app) -->
-    <SelectMenu
-      :model-value="store.allBots ? 'all' : store.activeId"
-      :options="botOptions"
-      placeholder="Pilih bot"
-      title="Switch storage bot"
-      @update:model-value="onSelectBot"
-    />
-    <button class="btn-ghost" title="Tambah bot" @click="showBotDlg = true">➕</button>
-    <button v-if="store.profiles.length > 1 && !store.allBots" class="btn-ghost" title="Hapus bot" @click="onDeleteBot">🗑</button>
-
-    <button class="btn-ghost" title="API tokens" @click="router.push('/api')">🔑</button>
-    <button class="btn-ghost" title="Ganti tema" @click="toggleTheme">{{ themeIcon }}</button>
-    <button class="btn-ghost" title="Dashboard" @click="showDash = true">📊</button>
-
-    <div class="ml-auto flex items-center gap-2 text-[13px] text-txt-dim whitespace-nowrap flex-wrap">
-      <span>{{ store.stats?.fileCount || 0 }} file</span>
-      <span class="w-1 h-1 rounded-full bg-accent inline-block"></span>
-      <span>{{ fmtBytes(store.stats?.totalSize) }}</span>
-      <span class="w-1 h-1 rounded-full bg-accent inline-block"></span>
-      <span>{{ store.stats?.savingsPercent || 0 }}% hemat</span>
-      <span class="text-accent-two font-semibold">{{ store.user ? '@' + store.user.username : '' }}</span>
-      <button class="border border-line rounded-lg px-2.5 py-1 text-xs text-txt-dim hover:text-red-500 hover:border-red-500" @click="logout">keluar</button>
-    </div>
-  </header>
-
-  <BotDialog v-if="showBotDlg" @close="showBotDlg = false" />
-  <AppDialog v-if="showAppDlg" @close="showAppDlg = false" />
-  <DashboardModal v-if="showDash" @close="showDash = false" />
+ <BotDialog v-if="showBotDlg" @close="showBotDlg = false" />
+ <AppDialog v-if="showAppDlg" @close="showAppDlg = false" />
+ <DashboardModal v-if="showDash" @close="showDash = false" />
 </template>
-
-<style scoped>
-.btn-ghost {
-  background: transparent; border: 1px solid var(--border); color: var(--text);
-  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
-}
-.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-</style>

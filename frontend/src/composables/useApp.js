@@ -63,6 +63,18 @@ export function openFolder(id) {
 export function applyFilters() {
   const q = store.search.toLowerCase();
   let arr = store.files.filter((f) => !q || (f.filename || '').toLowerCase().includes(q));
+  // filter type
+  if (store.filterType && store.filterType !== 'all') {
+    const typeMap = {
+      image: ['jpg','jpeg','png','gif','webp'],
+      video: ['mp4','mkv','webm','mov','avi'],
+      audio: ['mp3','wav','flac','ogg'],
+      doc: ['pdf','doc','docx','txt','md'],
+      archive: ['zip','tar','gz','rar','7z']
+    };
+    const exts = typeMap[store.filterType] || [];
+    arr = arr.filter(f => exts.includes((f.filename||'').split('.').pop().toLowerCase()));
+  }
   // filter folder: hanya file yang ada di folder aktif (root = semua file)
   if (store.currentFolder) {
     arr = arr.filter((f) => store.fileFolder[f.hash] === store.currentFolder);
@@ -83,14 +95,35 @@ export const pageItems = computed(() => {
 export const totalPages = computed(() => Math.max(1, Math.ceil(store.filtered.length / PAGE_SIZE)));
 
 // ---------- selection ----------
+let lastSelectedIdx = -1;
 export function toggleSelect(f) {
   if (store.selected.has(f.hash)) store.selected.delete(f.hash);
   else store.selected.add(f.hash);
 }
-
+export function toggleSelectWithShift(f, idx, event) {
+  if (event && event.shiftKey && lastSelectedIdx >= 0) {
+    const start = Math.min(lastSelectedIdx, idx);
+    const end = Math.max(lastSelectedIdx, idx);
+    const slice = store.filtered.slice(start, end + 1);
+    const allSelected = slice.every(x => store.selected.has(x.hash));
+    for (const x of slice) {
+      if (allSelected) store.selected.delete(x.hash);
+      else store.selected.add(x.hash);
+    }
+  } else {
+    toggleSelect(f);
+    lastSelectedIdx = idx;
+  }
+  store.selectMode = store.selected.size > 0;
+}
+export function selectAllFiltered() {
+  for (const f of store.filtered) store.selected.add(f.hash);
+  store.selectMode = true;
+}
 export function clearSelection() {
   store.selected.clear();
   store.selectMode = false;
+  lastSelectedIdx = -1;
 }
 
 // ---------- status ----------

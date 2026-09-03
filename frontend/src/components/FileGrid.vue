@@ -1,27 +1,28 @@
 <script setup>
 import { store } from '../store';
-import { escapeHtml } from '../store';
-import { toggleSelect } from '../composables/useApp';
-import { showTip, hideTip } from '../composables/useTip';
+import { toggleSelectWithShift } from '../composables/useApp';
 import FileCard from './FileCard.vue';
 
 defineProps({ items: { type: Array, default: () => [] } });
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'context']);
 
-function onCardClick(f, idx) {
-  if (store.selectMode) toggleSelect(f);
-  else emit('open', idx);
+function onCardClick(f, idx, e) {
+ if (store.selectMode || e.shiftKey) {
+ toggleSelectWithShift(f, store.page * 24 + idx, e);
+ } else emit('open', idx);
 }
+function onContext(payload) { emit('context', payload); }
 </script>
 
 <template>
-  <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2 sm:gap-3 mt-3.5">
-    <FileCard
-      v-for="(f, i) in items"
-      :key="f.hash"
-      :file="f"
-      :selected="store.selected.has(f.hash)"
-      @click="onCardClick(f, i)"
-    />
-  </div>
+ <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 mt-2">
+ <FileCard
+ v-for="(f, i) in items"
+ :key="f.hash"
+ :file="f"
+ :selected="store.selected.has(f.hash)"
+ @click="onCardClick(f, i, $event)"
+ @context="onContext"
+ />
+ </div>
 </template>

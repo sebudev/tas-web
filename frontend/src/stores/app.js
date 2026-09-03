@@ -1,45 +1,52 @@
-import { reactive } from 'vue';
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+import { useStorage } from '@vueuse/core';
 
 export const PAGE_SIZE = 24;
 
-export const store = reactive({
+export const useAppStore = defineStore('app', () => {
   // auth
-  user: null,
+  const user = ref(null);
   // files
-  files: [],
-  filtered: [],
-  page: 0,
-  search: '',
-  filterType: 'all',
-  sort: 'new',
-  view: localStorage.getItem('tasView') || 'grid',
-  selectMode: false,
-  selected: new Set(),
-  current: -1,
-  loading: false,
+  const files = ref([]);
+  const filtered = ref([]);
+  const page = ref(0);
+  const search = ref('');
+  const sort = ref('new');
+  const view = useStorage('tasView', 'grid');
+  const selectMode = ref(false);
+  const selected = ref(new Set());
+  const current = ref(-1);
+  const loading = ref(false);
   // jobs & uploads
-  jobs: [],
-  uploadQueue: [],
-  uploading: false,
+  const jobs = ref([]);
+  const uploadQueue = ref([]);
+  const uploading = ref(false);
   // bots
-  profiles: [],
-  activeId: null,
+  const profiles = ref([]);
+  const activeId = ref(null);
   // apps (workspace: grup bot + api keys)
-  apps: [],
-  currentApp: null,
-  allBots: false,
+  const apps = ref([]);
+  const currentApp = ref(null);
+  const allBots = ref(false);
   // folders
-  folders: [],
-  fileFolder: {},
-  currentFolder: null,
-  expandedFolders: new Set(),
+  const folders = ref([]);
+  const fileFolder = ref({});
+  const currentFolder = ref(null);
+  const expandedFolders = ref(new Set());
   // dashboard
-  stats: null,
-  activity: [],
-  shares: [],
+  const stats = ref(null);
+  const activity = ref([]);
+  const shares = ref([]);
+
+  return {
+    user, files, filtered, page, search, sort, view, selectMode, selected, current, loading,
+    jobs, uploadQueue, uploading, profiles, activeId, apps, currentApp, allBots,
+    folders, fileFolder, currentFolder, expandedFolders, stats, activity, shares,
+  };
 });
 
-// ---- helpers ----
+// ---- helpers (keep pure) ----
 export function fmtBytes(b) {
   if (b == null) return '–';
   if (b < 1024) return b + ' B';

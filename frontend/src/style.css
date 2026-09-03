@@ -74,3 +74,10 @@
 ::-webkit-scrollbar-track { background: transparent; }
 [data-theme='light'] ::-webkit-scrollbar-thumb { background: #E9E9E7; }
 [data-theme='light'] ::-webkit-scrollbar-thumb:hover { background: #E0E0DC; }
+
+/* Uniform buttons — Notion system */
+.btn-primary { @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-[13px] font-medium bg-[#37352F] text-white hover:bg-[#2F2F2F] dark:bg-[#E9E9E7] dark:text-[#191919] dark:hover:bg-white transition-colors; }
+.btn-secondary { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333] transition-colors; border-color: var(--border); color: var(--text); }
+.btn-ghost { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-transparent hover:bg-[var(--bg)] transition-colors; border-color: var(--border); color: var(--text-dim); }
+.btn-danger { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-[#FFF1F1] dark:bg-[#2A1F1F] text-[#E03E3E] border-[#FFD0D0] dark:border-[#5A2E2E] hover:bg-[#FFE4E4] transition-colors; }
+.btn-icon { @apply w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] transition-colors; border-color: var(--border); color: var(--text); }
