@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent } from 'radix-vue';
-import { Search, Folder, FileText, HardDrive, LayoutDashboard, Upload, Settings } from '@lucide/vue';
+import { Search, Folder, FileText, HardDrive, LayoutDashboard, Upload, Settings, Bot } from '@lucide/vue';
 import { store } from '../store';
 import { folderById } from '../composables/useApp';
 
@@ -52,6 +52,7 @@ function actionDashboard() { open.value = false; document.querySelector('[title=
  <button class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] hover:bg-[#F7F7F5] dark:hover:bg-[#262626] text-left" @click="actionUpload"><Upload :size="14" /> Upload file</button>
  <button class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] hover:bg-[#F7F7F5] dark:hover:bg-[#262626] text-left" @click="actionDashboard"><LayoutDashboard :size="14" /> Open dashboard</button>
  <button class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] hover:bg-[#F7F7F5] dark:hover:bg-[#262626] text-left" @click="open=false; router.push('/api')"><Settings :size="14" /> API tokens</button>
+ <button class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] hover:bg-[#F7F7F5] dark:hover:bg-[#262626] text-left" @click="open=false; router.push('/settings')"><Bot :size="14" /> Model AI settings</button>
  </div>
 
  <div v-if="filteredFolders.length">

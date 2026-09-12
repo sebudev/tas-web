@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { fmtBytes } from '../store';
 import { apiPost } from '../composables/useApi';
-import { KeyRound, Moon, Sun, LayoutDashboard, LogOut } from '@lucide/vue';
+import { KeyRound, Moon, Sun, LayoutDashboard, LogOut, Settings } from '@lucide/vue';
 import BotDialog from './BotDialog.vue';
 import AppDialog from './AppDialog.vue';
 import DashboardModal from './DashboardModal.vue';
@@ -32,6 +32,7 @@ async function logout() { await apiPost('/api/logout'); router.replace('/login')
 
  <div class="ml-auto flex items-center gap-1">
  <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="API tokens" @click="router.push('/api')"><KeyRound :size="14" /></button>
+ <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="Model AI settings" @click="router.push('/settings')"><Settings :size="14" /></button>
  <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="Ganti tema" @click="toggleTheme"><Moon v-if="isLight" :size="14" /><Sun v-else :size="14" /></button>
  <button class="w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" title="Dashboard" @click="showDash = true"><LayoutDashboard :size="14" /></button>
  <span class="hidden sm:inline text-[12px] font-medium px-2" :style="{ color: 'var(--text)' }">{{ store.user ? '@' + store.user.username : '' }}</span>

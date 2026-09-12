@@ -1213,6 +1213,201 @@ app.get('/api/activity', (req, res) => {
   res.json({ activity: db.prepare('SELECT * FROM activity ORDER BY ts DESC LIMIT 50').all() });
 });
 
+// ---------------- AI model settings (OpenCode Go) ----------------
+// Provider dikunci opencode-go (Zen Go); API key diambil dari env server
+// (OPENCODE_GO_API_KEY) — tidak pernah dikirim ke browser.
+// Daftar model = kurasi quota-gede dari docs OpenCode Go (opencode.ai/docs/go):
+// cap $60/bln + status aktif + termurah = request terbanyak. Urut quota desc.
+// Harga & est. request/bln bisa berubah sewaktu-waktu (cek docs).
+const ZEN_GO_BASE = process.env.OPENCODE_GO_BASE_URL || 'https://opencode.ai/zen/go/v1';
+const ZEN_GO_KEY = process.env.OPENCODE_GO_API_KEY || '';
+const AI_PROVIDER = 'opencode-go';
+const AI_MODELS = [
+  { id: 'mimo-v2.5', name: 'MiMo-V2.5', reqMonth: 150400, costIn: 0.14, costOut: 0.28, ep: 'chat', thinking: null },
+  { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision', reqMonth: 32500, costIn: 0.15, costOut: 0.6, ep: 'chat', thinking: { type: 'effort', values: ['low', 'high', 'max'] } },
+  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', reqMonth: 31580, costIn: 0.15, costOut: 0.5, ep: 'chat', thinking: { type: 'effort', values: ['low', 'high', 'max'] } },
+  { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', reqMonth: null, costIn: 0.15, costOut: 0.6, ep: 'chat', thinking: { type: 'effort', values: ['low', 'high', 'max'] } },
+  { id: 'mimo-v2.5-pro', name: 'MiMo-V2.5-Pro', reqMonth: 16300, costIn: 0.435, costOut: 0.87, ep: 'chat', thinking: null },
+  { id: 'hy4-preview', name: 'Hy4 Preview', reqMonth: 6770, costIn: 0.834, costOut: 2.5, ep: 'chat', thinking: { type: 'effort', values: ['none', 'high'] } },
+  { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', reqMonth: 6750, costIn: 0.95, costOut: 4, ep: 'chat', thinking: null },
+  { id: 'kimi-k2.6', name: 'Kimi K2.6', reqMonth: 5750, costIn: 0.95, costOut: 4, ep: 'chat', thinking: null },
+  { id: 'glm-5.2', name: 'GLM-5.2', reqMonth: 4300, costIn: 1.4, costOut: 4.4, ep: 'chat', thinking: { type: 'effort', values: ['high', 'max'] } },
+  { id: 'glm-5.1', name: 'GLM-5.1', reqMonth: 4300, costIn: 1.4, costOut: 4.4, ep: 'chat', thinking: null },
+  { id: 'muse-spark-1.3-contributor', name: 'Muse Spark 1.3', reqMonth: null, costIn: 0.1, costOut: 0.2, ep: 'responses', thinking: { type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] } },
+  { id: 'muse-spark-1.2-contributor', name: 'Muse Spark 1.2', reqMonth: null, costIn: 0.1, costOut: 0.2, ep: 'responses', thinking: { type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] } },
+  { id: 'hy3', name: 'Hy3', reqMonth: null, costIn: 0.14, costOut: 0.58, ep: 'chat', thinking: { type: 'effort', values: ['none', 'low', 'high'] } },
+  { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash', reqMonth: null, costIn: 0.15, costOut: 0.47, ep: 'messages', thinking: { type: 'effort', values: ['low', 'medium', 'xhigh'] } },
+  { id: 'longcat-2.0', name: 'LongCat-2.0', reqMonth: null, costIn: 0.3, costOut: 1.2, ep: 'chat', thinking: null },
+  { id: 'minimax-m2.7', name: 'MiniMax M2.7', reqMonth: null, costIn: 0.3, costOut: 1.2, ep: 'messages', thinking: null },
+  { id: 'minimax-m3', name: 'MiniMax M3', reqMonth: null, costIn: 0.3, costOut: 1.2, ep: 'messages', thinking: null },
+  { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', reqMonth: null, costIn: 0.4, costOut: 1.6, ep: 'messages', thinking: null },
+  { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', reqMonth: null, costIn: 0.5, costOut: 3, ep: 'messages', thinking: null },
+  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', reqMonth: null, costIn: 0.66, costOut: 1.98, ep: 'chat', thinking: { type: 'effort', values: ['high', 'max'] } },
+];
+const AI_DEFAULTS = { provider: AI_PROVIDER, model: 'glm-5.3-flash', temperature: 1, top_p: 1, max_tokens: 2048, reasoning: '', system_prompt: '' };
+
+db.exec(`CREATE TABLE IF NOT EXISTS ai_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  provider TEXT DEFAULT 'opencode-go',
+  model TEXT DEFAULT 'glm-5.3-flash',
+  temperature REAL DEFAULT 1,
+  top_p REAL DEFAULT 1,
+  max_tokens INTEGER DEFAULT 2048,
+  reasoning TEXT DEFAULT '',
+  system_prompt TEXT DEFAULT '',
+  session_id TEXT DEFAULT '',
+  updated_at INTEGER
+)`);
+
+function getAiSettings() {
+  const row = db.prepare('SELECT * FROM ai_settings WHERE id=1').get();
+  if (!row) return { ...AI_DEFAULTS, session_id: '' };
+  return {
+    provider: AI_PROVIDER,
+    model: AI_MODELS.some((m) => m.id === row.model) ? row.model : AI_DEFAULTS.model,
+    temperature: row.temperature ?? 1,
+    top_p: row.top_p ?? 1,
+    max_tokens: row.max_tokens ?? 2048,
+    reasoning: row.reasoning || '',
+    system_prompt: row.system_prompt || '',
+    session_id: row.session_id || '',
+  };
+}
+
+function getAiSession() {
+  let s = getAiSettings();
+  if (!s.session_id) {
+    s.session_id = crypto.randomUUID();
+    db.prepare('INSERT INTO ai_settings (id, provider, model, temperature, top_p, max_tokens, reasoning, system_prompt, session_id, updated_at) VALUES (1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id, updated_at=excluded.updated_at')
+      .run(s.provider, s.model, s.temperature, s.top_p, s.max_tokens, s.reasoning, s.system_prompt, s.session_id, Date.now());
+  }
+  return s.session_id;
+}
+
+async function zenGo(path, { method = 'GET', body = null, anthropic = false } = {}) {
+  if (!ZEN_GO_KEY) {
+    const e = new Error('OPENCODE_GO_API_KEY belum di-set di server');
+    e.status = 503;
+    throw e;
+  }
+  const headers = { 'Content-Type': 'application/json', 'x-opencode-session': getAiSession() };
+  if (anthropic) {
+    headers['x-api-key'] = ZEN_GO_KEY;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    headers['Authorization'] = 'Bearer ' + ZEN_GO_KEY;
+  }
+  const r = await fetch(ZEN_GO_BASE + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(120000),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data?.error?.message || ('Zen Go HTTP ' + r.status)), { status: 502 });
+  if (data && (data.type === 'error' || data.error)) throw Object.assign(new Error(data.error?.message || 'Zen Go error'), { status: 502 });
+  return data;
+}
+
+function fmtReq(n) {
+  if (n == null) return 'kuota gede';
+  if (n >= 1000) return '±' + (Math.round(n / 100) / 10).toLocaleString('id-ID') + ' rb/bln';
+  return '±' + n + '/bln';
+}
+
+app.get('/api/ai/models', (req, res) => {
+  res.json({
+    provider: AI_PROVIDER,
+    base: ZEN_GO_BASE,
+    keyConfigured: !!ZEN_GO_KEY,
+    quotaNote: 'Kurasi quota-gede dari docs OpenCode Go: cap $60/bln + aktif + termurah = request terbanyak. Harga & limit bisa berubah (opencode.ai/docs/go).',
+    models: AI_MODELS.map((m) => ({ ...m, quota: fmtReq(m.reqMonth) })),
+  });
+});
+
+app.get('/api/ai/settings', (req, res) => {
+  const s = getAiSettings();
+  const { session_id, ...pub } = s;
+  res.json({ ...pub, keyConfigured: !!ZEN_GO_KEY });
+});
+
+app.post('/api/ai/settings', (req, res) => {
+  const b = req.body || {};
+  const model = AI_MODELS.find((m) => m.id === b.model);
+  if (!model) return res.status(400).json({ error: 'Model tidak ada di daftar quota-gede' });
+  const temperature = Math.min(2, Math.max(0, Number(b.temperature ?? 1) || 0));
+  const top_p = Math.min(1, Math.max(0, Number(b.top_p ?? 1) || 0));
+  const max_tokens = Math.min(131072, Math.max(1, parseInt(b.max_tokens ?? 2048, 10) || 2048));
+  let reasoning = String(b.reasoning || '');
+  if (reasoning && !(model.thinking && model.thinking.values.includes(reasoning))) {
+    return res.status(400).json({ error: `Reasoning "${reasoning}" tidak didukung ${model.id}` });
+  }
+  const system_prompt = String(b.system_prompt || '').slice(0, 2000);
+  const cur = getAiSettings();
+  db.prepare(`INSERT INTO ai_settings (id, provider, model, temperature, top_p, max_tokens, reasoning, system_prompt, session_id, updated_at)
+              VALUES (1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+              provider=excluded.provider, model=excluded.model, temperature=excluded.temperature,
+              top_p=excluded.top_p, max_tokens=excluded.max_tokens, reasoning=excluded.reasoning,
+              system_prompt=excluded.system_prompt, updated_at=excluded.updated_at`)
+    .run(AI_PROVIDER, model.id, temperature, top_p, max_tokens, reasoning, system_prompt, cur.session_id, Date.now());
+  logActivity('ai', 'save model ' + model.id);
+  res.json({ ok: true, model: model.id });
+});
+
+app.get('/api/ai/usage', async (req, res) => {
+  try {
+    const data = await zenGo('/usage');
+    res.json({ usage: data.usage || data });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// Proxy chat — body: { messages: [{role, content}], system? }
+// Pakai settings tersimpan; key Hermes tetap di server.
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const s = getAiSettings();
+    const model = AI_MODELS.find((m) => m.id === s.model) || AI_MODELS[2];
+    const msgs = Array.isArray(req.body?.messages) ? req.body.messages.filter((m) => m && m.content).slice(-20) : [];
+    if (!msgs.length) return res.status(400).json({ error: 'messages kosong' });
+    const system = String(req.body?.system ?? s.system_prompt ?? '').slice(0, 2000);
+    let data, reply = '';
+    if (model.ep === 'messages') {
+      const body = { model: model.id, max_tokens: s.max_tokens, messages: msgs.map((m) => ({ role: m.role === 'system' ? 'user' : m.role, content: String(m.content).slice(0, 8000) })) };
+      if (system) body.system = system;
+      if (s.temperature !== 1) body.temperature = s.temperature;
+      if (s.top_p !== 1) body.top_p = s.top_p;
+      data = await zenGo('/messages', { method: 'POST', body, anthropic: true });
+      reply = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    } else if (model.ep === 'responses') {
+      const input = (system ? 'System: ' + system + '\n' : '') + msgs.map((m) => `${m.role}: ${m.content}`).join('\n').slice(0, 12000);
+      const body = { model: model.id, input };
+      if (s.reasoning) body.reasoning = { effort: s.reasoning };
+      if (s.temperature !== 1) body.temperature = s.temperature;
+      if (s.top_p !== 1) body.top_p = s.top_p;
+      data = await zenGo('/responses', { method: 'POST', body });
+      for (const item of data.output || []) {
+        for (const c of item.content || []) if (c.type === 'output_text' && c.text) reply += c.text;
+      }
+    } else {
+      const body = {
+        model: model.id,
+        messages: [...(system ? [{ role: 'system', content: system }] : []),
+          ...msgs.map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) }))],
+        temperature: s.temperature, top_p: s.top_p, max_tokens: s.max_tokens,
+      };
+      if (s.reasoning) body.reasoning_effort = s.reasoning;
+      data = await zenGo('/chat/completions', { method: 'POST', body });
+      reply = data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning_content || '';
+    }
+    logActivity('ai', 'chat via ' + model.id);
+    res.json({ reply, model: model.id, usage: data.usage || null });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // ---------------- S3 gateway credentials ----------------
 // Access key + secret utk klien S3 (rclone/s3cmd/aws cli). 1 bot = 1 bucket.
 db.exec(`CREATE TABLE IF NOT EXISTS s3_creds (

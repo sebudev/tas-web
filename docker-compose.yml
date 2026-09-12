@@ -19,6 +19,8 @@ services:
       - BOT_INGEST=${BOT_INGEST:-1}
       # override manual token bot (opsional; default didekripsi dari config.json)
       - TAS_BOT_TOKEN=${TAS_BOT_TOKEN:-}
+      # AI model (opencode-go) — key Hermes dari server, tidak pernah ke browser
+      - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
     networks:
       - caddy_default
