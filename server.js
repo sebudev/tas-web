@@ -1959,6 +1959,26 @@ function parseAmzDate(s) {
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
+// CORS gateway S3 — dipakai lintas-app (dashboard lain memuat file via presigned URL).
+// HARUS sebelum verifikasi SigV4: request OPTIONS (preflight) tidak membawa signature.
+// Set S3_ALLOWED_ORIGINS (koma) untuk allowlist; default '*' (reflect Origin).
+const S3_CORS_ORIGINS = (process.env.S3_ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
+app.use('/s3', (req, res, next) => {
+  const origin = req.headers.origin || '';
+  const allow = S3_CORS_ORIGINS.includes('*')
+    ? (origin || '*')
+    : (S3_CORS_ORIGINS.includes(origin) ? origin : (S3_CORS_ORIGINS[0] || '*'));
+  res.set('Access-Control-Allow-Origin', allow);
+  res.set('Vary', 'Origin');
+  res.set('Access-Control-Allow-Methods', 'GET,HEAD,PUT,DELETE,OPTIONS');
+  // reflect header yg diminta browser (x-amz-*, authorization, range, dst)
+  res.set('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Range, Authorization, x-amz-*');
+  res.set('Access-Control-Expose-Headers', 'ETag, Content-Length, Content-Type, Last-Modified, Content-Range, Accept-Ranges, x-amz-meta-tas-hash');
+  res.set('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // middleware auth utk semua request /s3
 // 2 mode: (1) header Authorization SigV4 (rclone/SDK), (2) presigned URL (X-Amz-* di query string)
 app.use('/s3', (req, res, next) => {
