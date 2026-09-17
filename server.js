@@ -1975,6 +1975,12 @@ app.use('/s3', (req, res, next) => {
   res.set('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Range, Authorization, x-amz-*');
   res.set('Access-Control-Expose-Headers', 'ETag, Content-Length, Content-Type, Last-Modified, Content-Range, Accept-Ranges, x-amz-meta-tas-hash');
   res.set('Access-Control-Max-Age', '86400');
+  // presigned URL = akses ber-signature → JANGAN di-cache CDN (Cloudflare).
+  // Kalau ter-cache, respons bisa disajikan tanpa validasi signature & tanpa
+  // header CORS yang benar (dan bocor lintas-origin).
+  res.set('Cache-Control', 'no-store');
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Cloudflare-CDN-Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
