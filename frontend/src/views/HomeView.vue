@@ -16,7 +16,7 @@ import ExplorerSidebar from '../components/ExplorerSidebar.vue';
 import Breadcrumb from '../components/Breadcrumb.vue';
 import DetailsPane from '../components/DetailsPane.vue';
 import ContextMenu from '../components/ContextMenu.vue';
-import { Folder, Menu } from '@lucide/vue';
+import { Folder, Menu, Files } from '@lucide/vue';
 import FileSkeleton from '../components/ui/FileSkeleton.vue';
 import DropOverlay from '../components/DropOverlay.vue';
 import CommandPalette from '../components/CommandPalette.vue';
@@ -127,15 +127,15 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
 </script>
 
 <template>
- <div class="h-screen flex flex-col overflow-hidden" :style="{ background: 'var(--bg)' }">
+ <div class="h-[100dvh] flex flex-col overflow-hidden" :style="{ background: 'var(--bg)' }">
  <DropOverlay />
  <CommandPalette />
- <div v-if="showMobileSidebar" class="fixed inset-0 bg-black/40 z-[40] lg:hidden" @click="showMobileSidebar = false"></div>
+ <div v-if="showMobileSidebar" class="fixed inset-0 bg-black/40 z-[40] md:hidden" @click="showMobileSidebar = false"></div>
 
  <div class="flex flex-1 min-h-0">
  <ExplorerSidebar
  :collapsed="sidebarCollapsed"
- class="hidden lg:flex"
+ class="hidden md:flex"
  @toggle="sidebarCollapsed = !sidebarCollapsed"
  @new-folder="onNewFolder"
  @open-folder="openFolder"
@@ -143,7 +143,7 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
  @app-settings="showAppDlg = true"
  @new-bot="showBotDlg = true"
  />
- <div v-if="showMobileSidebar" class="fixed left-0 top-0 bottom-0 w-[280px] z-[45] lg:hidden shadow-xl overflow-hidden" :style="{ background: 'var(--bg)' }">
+ <div v-if="showMobileSidebar" class="fixed left-0 top-0 bottom-0 w-[280px] z-[45] md:hidden shadow-xl overflow-hidden" :style="{ background: 'var(--bg)' }">
  <ExplorerSidebar :collapsed="false" @toggle="showMobileSidebar = false" @new-folder="onNewFolder" @new-app="onNewApp" @app-settings="showAppDlg = true" @new-bot="showBotDlg = true" />
  </div>
 
@@ -153,7 +153,7 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
  <div class="flex flex-1 min-h-0">
  <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
  <div class="px-3 py-2 border-b flex items-center gap-2" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
- <button class="lg:hidden w-7 h-7 rounded border flex items-center justify-center" :style="{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }" @click="showMobileSidebar = true"><Menu :size="14" /></button>
+ <button class="md:hidden w-7 h-7 rounded border flex items-center justify-center" :style="{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }" @click="showMobileSidebar = true"><Menu :size="14" /></button>
  <Breadcrumb class="flex-1 min-w-0" />
  <button
  v-if="detailsFile"
@@ -196,21 +196,21 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
 
  <FileSkeleton v-if="store.loading" />
  <div v-else-if="!store.filtered.length" class="text-center py-12 rounded-[8px] border-2 border-dashed bg-[var(--bg)]/40 dark:bg-[#1F1F1F] px-6" :style="{ borderColor: 'var(--border)' }">
- <div class="w-14 h-14 rounded-[12px] bg-white dark:bg-[#262626] border flex items-center justify-center mx-auto text-[24px] shadow-sm" :style="{ borderColor: 'var(--border)' }"></div>
+ <div class="w-14 h-14 rounded-[12px] bg-white dark:bg-[#262626] border flex items-center justify-center mx-auto shadow-sm" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }"><Files :size="24" /></div>
  <div class="text-[14px] font-semibold mt-3" :style="{ color: 'var(--text)' }">{{ store.currentFolder ? 'Folder ini kosong' : 'Belum ada file' }}</div>
  <div class="text-[12px] mt-1 max-w-[360px] mx-auto" :style="{ color: 'var(--text-dim)' }">{{ store.currentFolder ? 'Upload file atau pindahkan file ke sini. Drag & drop dari desktop juga bisa.' : 'Upload file pertama kamu! Drag & drop atau klik Upload. File terenkripsi & tersimpan di Telegram.' }}</div>
  <div class="mt-4 flex items-center justify-center gap-2">
- <button class="text-[12px] px-3 py-1.5 rounded-[6px] bg-[var(--text)] text-white hover:bg-[#2F2F2F] dark:bg-[var(--border)] dark:text-[#191919]" @click="document.querySelector('input[type=file]')?.click()">⬆ Upload file</button>
+ <button class="text-[12px] px-3 py-1.5 rounded-[6px] bg-[var(--text)] text-white hover:bg-[#2F2F2F] dark:bg-[#E9E9E7] dark:text-[#191919] dark:hover:bg-white" @click="document.querySelector('input[type=file]')?.click()">⬆ Upload file</button>
  <button v-if="store.currentFolder" class="text-[12px] px-3 py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="openFolder(null)">← Semua File</button>
  </div>
- <div class="mt-3 text-[11px]" :style="{ color: '#9B9A97' }">Tip: tekan <kbd class="px-1 py-0.5 rounded border bg-white text-[10px]">⌘K</kbd> untuk search, <kbd class="px-1 py-0.5 rounded border bg-white text-[10px]">Ctrl+A</kbd> pilih semua, <kbd class="px-1 py-0.5 rounded border bg-white text-[10px]">Shift+klik</kbd> range select</div>
+ <div class="mt-3 text-[11px]" :style="{ color: '#9B9A97' }">Tip: tekan <kbd class="px-1 py-0.5 rounded border bg-white dark:bg-[#262626] text-[10px]">⌘K</kbd> untuk search, <kbd class="px-1 py-0.5 rounded border bg-white dark:bg-[#262626] text-[10px]">Ctrl+A</kbd> pilih semua, <kbd class="px-1 py-0.5 rounded border bg-white dark:bg-[#262626] text-[10px]">Shift+klik</kbd> range select</div>
  </div>
 
  <template v-else>
  <FileGrid v-if="store.view === 'grid'" :items="pageItems" @open="openPreview" @context="onFileContext" />
  <FileTable v-else :items="pageItems" @open="openPreview" @context="onFileContext" />
 
- <div v-if="store.filtered.length > 24" class="flex items-center justify-center gap-3 mt-6 text-[13px]" :style="{ color: 'var(--text-dim)' }">
+ <div v-if="store.filtered.length > PAGE_SIZE" class="flex items-center justify-center gap-3 mt-6 text-[13px]" :style="{ color: 'var(--text-dim)' }">
  <button class="px-3 py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] disabled:opacity-40" :style="{ borderColor: 'var(--border)' }" :disabled="store.page === 0" @click="pageDown">< Prev</button>
  <span>Halaman {{ store.page + 1 }} / {{ totalPages }} · {{ store.filtered.length }} file</span>
  <button class="px-3 py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] disabled:opacity-40" :style="{ borderColor: 'var(--border)' }" :disabled="store.page >= totalPages - 1" @click="pageUp">Next ></button>

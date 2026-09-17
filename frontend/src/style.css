@@ -1,5 +1,6 @@
 /* Design system tas-web — dark default + Notion light theme (#F7F7F5) */
 :root {
+  color-scheme: dark; /* widget native (scrollbar, spinner, autofill) ikut gelap */
   --bg: #0a0a0f;
   --bg-2: #12121a;
   --card: #171720;
@@ -13,6 +14,7 @@
 
 /* Notion light — warm, paper-like, seperti BudgetWave */
 [data-theme='light'] {
+  color-scheme: light;
   --bg: #F7F7F5;
   --bg-2: #FFFFFF;
   --card: #FFFFFF;
@@ -80,7 +82,13 @@
 .btn-primary { @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-[13px] font-medium bg-[#37352F] text-white hover:bg-[#2F2F2F] dark:bg-[#E9E9E7] dark:text-[#191919] dark:hover:bg-white transition-colors; }
 .btn-secondary { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333] transition-colors; border-color: var(--border); color: var(--text); }
 .btn-ghost { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-transparent hover:bg-[var(--bg)] transition-colors; border-color: var(--border); color: var(--text-dim); }
-.btn-danger { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-[#FFF1F1] dark:bg-[#2A1F1F] text-[#E03E3E] border-[#FFD0D0] dark:border-[#5A2E2E] hover:bg-[#FFE4E4] transition-colors; }
+.btn-danger { @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-[#FFF1F1] dark:bg-[#2A1F1F] text-[#E03E3E] border-[#FFD0D0] dark:border-[#5A2E2E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] transition-colors; }
+
+/* chip status (ok/err) — adaptif tema gelap/terang */
+.chip-ok { @apply border; background: #E6F4EA; border-color: #A7E0B5; color: #1A7F37; }
+.chip-err { @apply border; background: #FFF1F1; border-color: #FFD0D0; color: #E03E3E; }
+[data-theme='dark'] .chip-ok { background: #1F2A22; border-color: #2E5A3A; color: #67D391; }
+[data-theme='dark'] .chip-err { background: #2A1F1F; border-color: #5A2E2E; color: #FF8A8A; }
 .btn-icon { @apply w-7 h-7 rounded-[6px] inline-flex items-center justify-center border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] transition-colors; border-color: var(--border); color: var(--text); }
 
 /* input seragam semua dialog/form */
@@ -96,6 +104,10 @@
   @apply absolute top-3 right-3 w-7 h-7 rounded-[6px] border inline-flex items-center justify-center bg-white dark:bg-[#262626] hover:bg-[var(--bg)] dark:hover:bg-[#333] transition-colors;
   border-color: var(--border); color: var(--text);
 }
+
+/* safe-area (notch / home indicator iPhone) */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+.bottom-safe { bottom: calc(1rem + env(safe-area-inset-bottom)); }
 
 /* progress indeterminate utk job yang sedang jalan */
 .bar-indeterminate { position: relative; overflow: hidden; }

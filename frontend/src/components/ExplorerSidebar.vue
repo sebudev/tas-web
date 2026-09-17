@@ -16,12 +16,6 @@ const appBots = computed(() => currentAppBots());
 const curApp = computed(() => appById(store.currentApp));
 const rootChildren = computed(() => folderChildren(null));
 
-const usagePct = computed(() => {
- const s = store.stats;
- if (!s || !s.totalSize) return 0;
- // tas tidak ada quota, pakai visual saja 0-100 dari totalSize / 2GB sebagai contoh
- return Math.min(100, Math.round((s.totalSize / (2 * 1024 * 1024 * 1024)) * 100));
-});
 </script>
 
 <template>
@@ -69,7 +63,7 @@ const usagePct = computed(() => {
  <div class="flex items-center gap-1">
  <span class="text-[11px] px-1.5 py-0.5 rounded bg-white dark:bg-[#2A2A2A] border" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }">{{ store.apps.length }}</span>
  <button
- class="w-6 h-6 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
+ class="w-7 h-7 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
  :style="{ color: 'var(--text-dim)' }"
  title="App baru"
  @click="emit('new-app')"
@@ -97,7 +91,7 @@ const usagePct = computed(() => {
  <div class="text-[11px] truncate" :style="{ color: 'var(--text-dim)' }">{{ appBots.length }} bot · {{ curApp.bots?.length || 0 }} attached</div>
  </div>
  <button
- class="shrink-0 w-6 h-6 rounded flex items-center justify-center hover:bg-[var(--bg)] dark:hover:bg-[#333] border border-transparent hover:border-[#E9E9E7]"
+ class="shrink-0 w-7 h-7 rounded flex items-center justify-center hover:bg-[var(--bg)] dark:hover:bg-[#333] border border-transparent hover:border-[#E9E9E7]"
  :style="{ color: 'var(--text-dim)' }"
  title="Kelola app (rename, bot, hapus)"
  @click="emit('app-settings')"
@@ -110,7 +104,7 @@ const usagePct = computed(() => {
  <div class="flex items-center justify-between px-2 mb-1.5">
  <span class="text-[11px] font-semibold tracking-wide uppercase" :style="{ color: 'var(--text-dim)' }">Bots</span>
  <button
- class="w-6 h-6 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
+ class="w-7 h-7 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
  :style="{ color: 'var(--text-dim)' }"
  title="Tambah bot"
  @click="emit('new-bot')"
@@ -144,14 +138,14 @@ const usagePct = computed(() => {
  <div class="flex items-center justify-between px-2 mb-1.5">
  <span class="text-[11px] font-semibold tracking-wide uppercase" :style="{ color: 'var(--text-dim)' }">Folders</span>
  <button
- class="w-6 h-6 rounded flex items-center justify-center text-[12px] hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
+ class="w-7 h-7 rounded flex items-center justify-center text-[12px] hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
  :style="{ color: 'var(--text-dim)' }"
  title="Folder baru"
  @click="emit('new-folder')"
  ><Plus :size="12" /></button>
  </div>
  <div v-if="!rootChildren.length" class="px-2 py-2 text-[12px] rounded border border-dashed" :style="{ color: 'var(--text-dim)', borderColor: 'var(--border)', background: 'var(--bg)' }">
- Belum ada folder. Klik <Plus :size="12" /> untuk buat.
+ Belum ada folder. Klik <Plus :size="12" class="inline align-[-2px]" /> untuk buat.
  </div>
  <FolderSidebar v-else />
  </div>
@@ -166,17 +160,14 @@ const usagePct = computed(() => {
  </div>
 
  <!-- storage footer -->
- <div v-if="!collapsed" class="p-3 border-t shrink-0" :style="{ borderColor: 'var(--border)', background: 'var(--card)' }">
- <div class="flex items-center justify-between text-[11px] mb-1.5">
+ <div v-if="!collapsed" class="p-3 border-t shrink-0 pb-safe" :style="{ borderColor: 'var(--border)', background: 'var(--card)' }">
+ <div class="flex items-center justify-between text-[11px]">
  <span :style="{ color: 'var(--text-dim)' }">Storage</span>
  <span class="font-medium" :style="{ color: 'var(--text)' }">{{ fmtBytes(store.stats?.totalSize) }}</span>
  </div>
- <div class="h-1.5 rounded-full overflow-hidden" style="background:#E9E9E7">
- <div class="h-full rounded-full transition-all" :style="{ width: usagePct + '%', background: usagePct > 80 ? '#E03E3E' : '#2383E2' }"></div>
- </div>
  <div class="flex items-center justify-between text-[11px] mt-1.5" :style="{ color: 'var(--text-dim)' }">
  <span>{{ store.stats?.fileCount || 0 }} file</span>
- <span>{{ usagePct }}%</span>
+ <span v-if="store.stats?.savingsPercent != null">hemat {{ store.stats.savingsPercent }}%</span>
  </div>
  </div>
  </aside>

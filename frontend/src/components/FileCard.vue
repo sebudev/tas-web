@@ -42,7 +42,7 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  <!-- selection checkbox -->
  <div
  class="absolute top-2 right-2 w-5 h-5 rounded-[4px] flex items-center justify-center text-[11px] font-bold border transition-all"
- :style="isSel ? { background: '#2383E2', color: '#fff', borderColor: '#2383E2' } : { background: 'rgba(255,255,255,0.9)', color: 'transparent', borderColor: 'var(--border)' }"
+ :style="isSel ? { background: '#2383E2', color: '#fff', borderColor: '#2383E2' } : { background: 'var(--bg)', color: 'transparent', borderColor: 'var(--border)' }"
  :class="!isSel ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'"
  ><Check :size="12" v-if="isSel" /></div>
 
@@ -74,7 +74,7 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  </div>
 
  <div v-if="file.tags && file.tags.length" class="flex flex-wrap gap-1">
- <span v-for="t in file.tags" :key="t" class="text-[10px] px-1.5 py-0.5 rounded-full border" :style="{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text-dim)' }">#{{ t }}</span>
+ <span v-for="t in file.tags" :key="t" class="text-[10px] px-1.5 py-0.5 rounded-full border break-all max-w-full" :style="{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text-dim)' }">#{{ t }}</span>
  </div>
  </div>
  </div>

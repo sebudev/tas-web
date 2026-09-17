@@ -1,7 +1,8 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { store, fmtBytes, fmtDate } from '../store';
 import { folderById } from '../composables/useApp';
+import { apiGet } from '../composables/useApi';
 import { Download, Share2, FolderInput, Trash2, Link2, Copy, Clock, Tag, Film, Image as ImageIcon, Package, Folder, Bot, X } from '@lucide/vue';
 import { toast } from '../composables/useToast';
 
@@ -12,6 +13,11 @@ const tab = ref('info'); // info | share | activity
 const folder = computed(() => {
  const fid = store.fileFolder[props.file.hash];
  return fid ? folderById(fid) : null;
+});
+// activity hanya di-load dashboard; ambil saat tab Activity dibuka
+watch(tab, async (t) => {
+ if (t !== 'activity' || store.activity.length) return;
+ try { const d = await apiGet('/api/activity'); store.activity = d.activity || []; } catch { /* ignore */ }
 });
 const fileActivity = computed(() => {
  const key = props.file?.filename || props.file?.hash || '';
@@ -32,14 +38,14 @@ function copyHash() {
 </script>
 
 <template>
- <aside class="flex-1 flex flex-col overflow-hidden w-full" :style="{ background: 'var(--card)' }">
+ <aside class="flex-1 flex flex-col overflow-hidden w-full pb-safe" :style="{ background: 'var(--card)' }">
  <div class="h-[45px] flex items-center justify-between px-3 border-b shrink-0" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
  <div class="flex rounded-full border p-1 gap-1 bg-white dark:bg-[#262626]" :style="{ borderColor: 'var(--border)' }">
- <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='info' ? { background: 'var(--text)', color: '#fff' } : { color: 'var(--text-dim)' }" @click="tab='info'">Info</button>
- <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='share' ? { background: 'var(--text)', color: '#fff' } : { color: 'var(--text-dim)' }" @click="tab='share'">Share</button>
- <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='activity' ? { background: 'var(--text)', color: '#fff' } : { color: 'var(--text-dim)' }" @click="tab='activity'">Activity</button>
+ <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='info' ? { background: 'var(--text)', color: 'var(--card)' } : { color: 'var(--text-dim)' }" @click="tab='info'">Info</button>
+ <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='share' ? { background: 'var(--text)', color: 'var(--card)' } : { color: 'var(--text-dim)' }" @click="tab='share'">Share</button>
+ <button class="px-2.5 py-1 rounded-full text-[11px] font-medium" :style="tab==='activity' ? { background: 'var(--text)', color: 'var(--card)' } : { color: 'var(--text-dim)' }" @click="tab='activity'">Activity</button>
  </div>
- <button class="w-6 h-6 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[12px]" :style="{ color: 'var(--text-dim)' }" @click="emit('close')"><X :size="14" /></button>
+ <button class="w-7 h-7 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center" :style="{ color: 'var(--text-dim)' }" @click="emit('close')" aria-label="Tutup"><X :size="14" /></button>
  </div>
 
  <div class="flex-1 overflow-y-auto p-4 space-y-4">
@@ -51,7 +57,7 @@ function copyHash() {
  <div class="font-semibold text-[13px] break-all" :style="{ color: 'var(--text)' }">{{ file.filename || file.hash }}</div>
  <div class="text-[11px] mt-1 font-mono break-all flex items-center gap-1" :style="{ color: 'var(--text-dim)' }">
  <span class="truncate">{{ file.hash }}</span>
- <button class="shrink-0 w-6 h-6 rounded hover:bg-[#F7F7F5] flex items-center justify-center" @click="copyHash" title="Copy hash"><Copy :size="12" /></button>
+ <button class="shrink-0 w-7 h-7 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626] flex items-center justify-center" @click="copyHash" title="Copy hash"><Copy :size="12" /></button>
  </div>
 
  <div class="grid grid-cols-2 gap-2 text-[12px] mt-4">
@@ -73,17 +79,17 @@ function copyHash() {
  </div>
 
  <div v-if="file.tags && file.tags.length" class="flex flex-wrap gap-1 mt-3">
- <span v-for="t in file.tags" :key="t" class="text-[11px] px-2 py-1 rounded-full border bg-white dark:bg-[#262626]" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }">#{{ t }}</span>
+ <span v-for="t in file.tags" :key="t" class="text-[11px] px-2 py-1 rounded-full border bg-white dark:bg-[#262626] break-all max-w-full" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }">#{{ t }}</span>
  </div>
 
  <div class="space-y-2 mt-4">
  <button class="w-full py-2 rounded-[6px] font-medium text-[13px] bg-[#37352F] text-white hover:bg-[#2F2F2F] dark:bg-[#E9E9E7] dark:text-[#191919] dark:hover:bg-white inline-flex items-center justify-center gap-1.5" @click="emit('download', file)"><Download :size="14" /> Download</button>
  <div class="grid grid-cols-3 gap-2">
  <button class="py-2 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] dark:hover:bg-[#333] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="emit('share', file)"><Share2 :size="12" /> Share</button>
- <button class="py-2 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="emit('move', file)"><FolderInput :size="12" /> Move</button>
- <button class="py-2 rounded-[6px] border bg-[#FFF1F1] dark:bg-[#3A2222] text-[12px] border-[#FFD0D0] dark:border-[#5A2E2E] text-[#E03E3E] hover:bg-[#FFE4E4] inline-flex items-center justify-center gap-1" @click="emit('delete', file)"><Trash2 :size="12" /> Delete</button>
+ <button class="py-2 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] dark:hover:bg-[#333] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="emit('move', file)"><FolderInput :size="12" /> Move</button>
+ <button class="py-2 rounded-[6px] border bg-[#FFF1F1] dark:bg-[#3A2222] text-[12px] border-[#FFD0D0] dark:border-[#5A2E2E] text-[#E03E3E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] inline-flex items-center justify-center gap-1" @click="emit('delete', file)"><Trash2 :size="12" /> Delete</button>
  </div>
- <button class="w-full py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }" @click="copyLink"><Link2 :size="12" /> Copy link</button>
+ <button class="w-full py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] dark:hover:bg-[#333] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }" @click="copyLink"><Link2 :size="12" /> Salin URL download</button>
  </div>
  </div>
 

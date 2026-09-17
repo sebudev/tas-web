@@ -69,8 +69,8 @@ async function onMove() {
  @click="selectedId = f.id"
  >
  <Folder :size="14" class="shrink-0" />
- <span class="truncate">{{ f.name }}</span>
- <span v-if="f.fileCount" class="ml-auto shrink-0 text-[10.5px] bg-black/10 border border-line rounded-full px-1.5 py-px">{{ f.fileCount }}</span>
+ <span class="truncate flex-1 min-w-0">{{ f.name }}</span>
+ <span v-if="f.fileCount" class="shrink-0 text-[10.5px] bg-black/10 border border-line rounded-full px-1.5 py-px">{{ f.fileCount }}</span>
  </button>
  <div v-if="!folderList.length" class="text-center text-[12px] text-txt-dim py-6">
  Belum ada folder — buat dulu lewat sidebar.

@@ -51,7 +51,7 @@ const barOptions = { responsive: true, plugins: { legend: { display: false } }, 
  <div class="w-full max-w-[720px] max-h-[88vh] overflow-hidden bg-white dark:bg-[#1F1F1F] border rounded-[8px] shadow-xl flex flex-col" :style="{ borderColor: 'var(--border)' }">
  <!-- header Notion -->
  <div class="px-5 py-4 border-b flex items-center gap-3" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
- <div class="w-8 h-8 rounded-[6px] bg-[var(--text)] flex items-center justify-center text-white"><LayoutDashboard :size="16" /></div>
+ <div class="w-8 h-8 rounded-[6px] bg-[var(--text)] flex items-center justify-center text-white dark:text-[#191919]"><LayoutDashboard :size="16" /></div>
  <div>
  <DialogTitle class="text-[14px] font-semibold" :style="{ color: 'var(--text)' }">Dashboard</DialogTitle>
  <DialogDescription class="text-[12px]" :style="{ color: 'var(--text-dim)' }">Ringkasan storage Telegram — Notion style</DialogDescription>

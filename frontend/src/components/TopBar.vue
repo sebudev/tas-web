@@ -16,8 +16,9 @@ function toggleTheme() {
  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
  document.documentElement.dataset.theme = next;
  localStorage.setItem('tasTheme', next);
+ document.querySelector('meta[name="theme-color"]')?.setAttribute('content', next === 'light' ? '#F7F7F5' : '#191919');
 }
-async function logout() { await apiPost('/api/logout'); router.replace('/login'); }
+async function logout() { await apiPost('/api/logout'); store.user = null; router.replace('/login'); }
 </script>
 
 <template>

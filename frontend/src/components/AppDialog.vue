@@ -58,7 +58,7 @@ async function onDelete() {
  <div class="modal-backdrop" @click="emit('close')"></div>
  <div class="fixed inset-0 z-[100] flex items-center justify-center p-5 pointer-events-none">
  <div v-focus-trap role="dialog" aria-modal="true" aria-label="Kelola app" class="relative pointer-events-auto w-full max-w-[430px] bg-card border border-line rounded-xl2 p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
- <h3 class="text-[15px] font-semibold mb-3 flex items-center gap-2" :style="{ color: 'var(--text)' }"><Settings :size="16" class="shrink-0" /> App: {{ app?.name || '—' }}</h3>
+ <h3 class="text-[15px] font-semibold mb-3 flex items-center gap-2 pr-8" :style="{ color: 'var(--text)' }"><Settings :size="16" class="shrink-0" /><span class="truncate">App: {{ app?.name || '—' }}</span></h3>
 
  <label class="block text-xs text-txt-dim mb-1">Nama app</label>
  <div class="flex gap-2 mb-4">

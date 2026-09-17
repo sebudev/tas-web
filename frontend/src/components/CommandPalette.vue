@@ -73,20 +73,20 @@ function actionDashboard() { open.value = false; document.querySelector('[title=
 
  <div v-if="filteredFolders.length">
  <div class="text-[11px] font-semibold tracking-wide uppercase px-2 py-1" :style="{ color: 'var(--text-dim)' }">Folders · {{ filteredFolders.length }}</div>
- <button v-for="(f, i) in filteredFolders" :key="f.id" class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] text-left" :class="active === i ? 'bg-[#F7F7F5] dark:bg-[#333]' : 'hover:bg-[#F7F7F5] dark:hover:bg-[#262626]'" @mouseenter="active = i" @click="selectFolder(f)"><Folder :size="14" class="text-[#706F6C]" /> {{ f.name }}</button>
+ <button v-for="(f, i) in filteredFolders" :key="f.id" class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] text-left" :class="active === i ? 'bg-[#F7F7F5] dark:bg-[#333]' : 'hover:bg-[#F7F7F5] dark:hover:bg-[#262626]'" @mouseenter="active = i" @click="selectFolder(f)"><Folder :size="14" class="text-[#706F6C] shrink-0" /> <span class="truncate flex-1 min-w-0">{{ f.name }}</span></button>
  </div>
 
  <div v-if="filteredFiles.length">
  <div class="text-[11px] font-semibold tracking-wide uppercase px-2 py-1" :style="{ color: 'var(--text-dim)' }">Files · {{ filteredFiles.length }}</div>
- <button v-for="(f, i) in filteredFiles" :key="f.hash" class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] text-left truncate" :class="active === filteredFolders.length + i ? 'bg-[#F7F7F5] dark:bg-[#333]' : 'hover:bg-[#F7F7F5] dark:hover:bg-[#262626]'" @mouseenter="active = filteredFolders.length + i" @click="selectFile(f)"><FileText :size="14" class="opacity-60 shrink-0" /> <span class="truncate">{{ f.filename || f.hash }}</span><span class="ml-auto text-[11px] opacity-50 shrink-0">{{ f.profileName || '' }}</span></button>
+ <button v-for="(f, i) in filteredFiles" :key="f.hash" class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] text-left truncate" :class="active === filteredFolders.length + i ? 'bg-[#F7F7F5] dark:bg-[#333]' : 'hover:bg-[#F7F7F5] dark:hover:bg-[#262626]'" @mouseenter="active = filteredFolders.length + i" @click="selectFile(f)"><FileText :size="14" class="opacity-60 shrink-0" /> <span class="truncate flex-1 min-w-0">{{ f.filename || f.hash }}</span><span class="text-[11px] opacity-50 shrink-0 max-w-[40%] truncate">{{ f.profileName || '' }}</span></button>
  </div>
 
  <div v-if="!filteredFiles.length && !filteredFolders.length" class="text-center py-6 text-[13px]" :style="{ color: 'var(--text-dim)' }">No results for “{{ query }}”</div>
  </div>
 
  <div class="px-3 py-2 border-t flex items-center gap-2 text-[11px]" :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--text-dim)' }">
- <span><kbd class="px-1 py-0.5 rounded border bg-white">↑↓</kbd> navigate</span>
- <span><kbd class="px-1 py-0.5 rounded border bg-white">↵</kbd> select</span>
+ <span><kbd class="px-1 py-0.5 rounded border bg-white dark:bg-[#262626]">↑↓</kbd> navigate</span>
+ <span><kbd class="px-1 py-0.5 rounded border bg-white dark:bg-[#262626]">↵</kbd> select</span>
  <span class="ml-auto">⌘K to toggle</span>
  </div>
  </DialogContent>

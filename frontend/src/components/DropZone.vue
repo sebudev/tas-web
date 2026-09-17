@@ -23,7 +23,7 @@ function onFiles(e) {
  @click="fileInput.click()"
  @dragover.prevent="over = true"
  @dragleave="over = false"
- @drop.prevent="onDrop"
+ @drop.prevent.stop="onDrop"
  >
  Tarik &amp; lepas file di sini, atau klik untuk upload (bisa banyak sekaligus) — dienkripsi AES-256-GCM ke Telegram
  </div>

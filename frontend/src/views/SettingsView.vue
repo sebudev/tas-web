@@ -100,7 +100,7 @@ onMounted(loadAll);
 </script>
 
 <template>
-  <div class="min-h-screen" :style="{ background: 'var(--bg)' }">
+  <div class="min-h-[100dvh]" :style="{ background: 'var(--bg)' }">
     <header class="h-[45px] shrink-0 flex items-center gap-2 px-3 border-b bg-white dark:bg-[#191919] sticky top-0 z-20" :style="{ borderColor: 'var(--border)' }">
       <div class="flex items-center gap-2">
         <span class="w-7 h-7 rounded-[8px] bg-[#37352F] dark:bg-[#E9E9E7] flex items-center justify-center text-white dark:text-[#37352F] text-[12px] font-bold">T</span>
@@ -119,7 +119,7 @@ onMounted(loadAll);
             <div class="text-[13px] font-semibold" :style="{ color: 'var(--text)' }">Provider AI</div>
             <div class="text-[11px] font-mono" :style="{ color: 'var(--text-dim)' }">{{ provider }} · zen/go/v1</div>
           </div>
-          <span class="ml-auto text-[11px] px-2 py-1 rounded-full border inline-flex items-center gap-1" :style="keyOk ? { background: '#E6F4EA', borderColor: '#A7E0B5', color: '#1A7F37' } : { background: '#FFF1F1', borderColor: '#FFD0D0', color: '#E03E3E' }">
+          <span class="ml-auto text-[11px] px-2 py-1 rounded-full inline-flex items-center gap-1" :class="keyOk ? 'chip-ok' : 'chip-err'">
             <KeyRound :size="11" /> {{ keyOk ? 'key Hermes aktif' : 'key belum di-set' }}
           </span>
         </div>
@@ -154,13 +154,13 @@ onMounted(loadAll);
               :style="model===m.id ? { borderColor: '#2383E2', background: '#2383E20D', boxShadow: '0 0 0 1px #2383E2' } : { borderColor: 'var(--border)', background: 'var(--card)' }"
               @click="onPick(m.id)"
             >
-              <div class="flex items-center gap-2">
-                <span class="font-semibold text-[13px]" :style="{ color: 'var(--text)' }">{{ m.name }}</span>
-                <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded-full border font-medium whitespace-nowrap" :style="{ background: '#E6F4EA', borderColor: '#A7E0B5', color: '#1A7F37' }">{{ m.quota }}</span>
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="font-semibold text-[13px] truncate" :style="{ color: 'var(--text)' }">{{ m.name }}</span>
+                <span class="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap chip-ok">{{ m.quota }}</span>
               </div>
-              <div class="mt-1.5 flex items-center gap-1.5 text-[11px]" :style="{ color: 'var(--text-dim)' }">
-                <span class="font-mono">{{ m.id }}</span>
-                <span class="px-1 py-px rounded border" :style="{ borderColor: 'var(--border)' }">{{ m.ep }}</span>
+              <div class="mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0" :style="{ color: 'var(--text-dim)' }">
+                <span class="font-mono truncate">{{ m.id }}</span>
+                <span class="shrink-0 px-1 py-px rounded border" :style="{ borderColor: 'var(--border)' }">{{ m.ep }}</span>
               </div>
               <div class="mt-1 text-[11px]" :style="{ color: 'var(--text-dim)' }">${{ m.costIn }}/{{ m.costOut }} per 1M · cap $60/bln</div>
             </button>
@@ -210,7 +210,7 @@ onMounted(loadAll);
             <label class="text-[12px] font-medium" :style="{ color: 'var(--text)' }">Test prompt</label>
             <input v-model="testMsg" class="mt-1.5 w-full px-3 py-1.5 rounded-[6px] border bg-[var(--bg)] text-[13px] outline-none focus:border-[#2383E2]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @keydown.enter="test" />
           </div>
-          <div v-if="testReply" class="rounded-[6px] border p-3 text-[13px] whitespace-pre-wrap" :style="{ background: '#E6F4EA', borderColor: '#A7E0B5', color: '#1A7F37' }">
+          <div v-if="testReply" class="rounded-[6px] p-3 text-[13px] whitespace-pre-wrap chip-ok">
             <div class="flex items-center gap-1.5 font-semibold mb-1"><Check :size="14" /> Reply</div>
             {{ testReply }}
           </div>

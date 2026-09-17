@@ -89,9 +89,9 @@ async function onDelete(f) {
  </button>
 
  <div class="hidden group-hover:flex items-center gap-0.5 shrink-0 pr-1">
- <button class="w-5 h-5 flex items-center justify-center text-[10px] text-txt-dim hover:text-accent rounded" title="Subfolder baru" @click.stop="onCreate"><Plus :size="12" /></button>
- <button class="w-5 h-5 flex items-center justify-center text-[10px] text-txt-dim hover:text-accent rounded" title="Ganti nama" @click.stop="onRename(f)"><Pencil :size="12" /></button>
- <button class="w-5 h-5 flex items-center justify-center text-[10px] text-txt-dim hover:text-red-400 rounded" title="Hapus folder" @click.stop="onDelete(f)"><Trash2 :size="12" /></button>
+ <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-accent rounded" title="Subfolder baru" @click.stop="onCreate"><Plus :size="12" /></button>
+ <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-accent rounded" title="Ganti nama" @click.stop="onRename(f)"><Pencil :size="12" /></button>
+ <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-red-400 rounded" title="Hapus folder" @click.stop="onDelete(f)"><Trash2 :size="12" /></button>
  </div>
  </div>
 

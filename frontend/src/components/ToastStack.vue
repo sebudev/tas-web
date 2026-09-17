@@ -4,18 +4,14 @@ import { X } from '@lucide/vue';
 </script>
 
 <template>
- <div class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-1.5 pointer-events-none px-3">
+ <div class="fixed bottom-safe left-1/2 -translate-x-1/2 z-[200] flex flex-col items-center gap-1.5 pointer-events-none px-3">
  <transition-group name="toast">
  <div
  v-for="t in toasts"
  :key="t.id"
  class="max-w-[420px] w-full px-3 py-2.5 rounded-[6px] text-[13px] border pointer-events-auto shadow-[0_4px_12px_rgba(0,0,0,0.08)] cursor-pointer flex items-center gap-2"
- :style="{
- background: t.cls==='err' ? '#FFF1F1' : t.cls==='ok' ? '#E6F4EA' : 'var(--card)',
- borderColor: t.cls==='err' ? '#FFD0D0' : t.cls==='ok' ? '#A7E0B5' : 'var(--border)',
- color: 'var(--text)',
- boxShadow: '0 2px 8px rgba(15,15,15,0.08), 0 0 0 1px rgba(15,15,15,0.04)'
- }"
+ :class="t.cls==='err' ? 'bg-[#FFF1F1] dark:bg-[#2A1F1F] border-[#FFD0D0] dark:border-[#5A2E2E]' : t.cls==='ok' ? 'bg-[#E6F4EA] dark:bg-[#1F2A22] border-[#A7E0B5] dark:border-[#2E5A3A]' : 'bg-[var(--card)] border-[var(--border)]'"
+ :style="{ color: 'var(--text)', boxShadow: '0 2px 8px rgba(15,15,15,0.08), 0 0 0 1px rgba(15,15,15,0.04)' }"
  @click="dismiss(t.id)"
  >
  <span class="shrink-0 w-1.5 h-1.5 rounded-full" :style="{ background: t.cls==='err' ? '#E03E3E' : t.cls==='ok' ? '#1A7F37' : '#2383E2' }"></span>

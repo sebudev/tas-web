@@ -64,7 +64,7 @@ async function create() {
  <div class="modal-backdrop" @click="emit('close')"></div>
  <div class="fixed inset-0 z-[100] flex items-center justify-center p-5 pointer-events-none">
  <div v-focus-trap role="dialog" aria-modal="true" aria-label="Tambah storage bot" class="pointer-events-auto w-full max-w-[380px] bg-card border border-line rounded-xl2 p-5 relative">
- <h3 class="text-[15px] font-semibold mb-1 flex items-center gap-2" :style="{ color: 'var(--text)' }"><Bot :size="16" class="shrink-0" /> Tambah Storage Bot</h3>
+ <h3 class="text-[15px] font-semibold mb-1 flex items-center gap-2 pr-8" :style="{ color: 'var(--text)' }"><Bot :size="16" class="shrink-0" /> Tambah Storage Bot</h3>
  <div class="text-xs text-txt-dim mb-2">Buat bot baru dulu di Telegram: pesan <b>@BotFather</b> &gt; <b>/newbot</b> &gt; salin token-nya.</div>
 
  <label class="block text-xs text-txt-dim mb-1">Nama profile</label>

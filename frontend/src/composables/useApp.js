@@ -43,10 +43,21 @@ export function folderById(id) {
   return store.folders.find((f) => f.id === id) || null;
 }
 
+// index anak-folder sekali per perubahan store.folders → folderChildren O(1),
+// bukan filter+sort seluruh daftar tiap panggilan (yang dulu O(F²) saat render)
+export const folderTree = computed(() => {
+  const map = new Map();
+  for (const f of store.folders) {
+    const p = f.parentId || null;
+    if (!map.has(p)) map.set(p, []);
+    map.get(p).push(f);
+  }
+  for (const arr of map.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+  return map;
+});
+
 export function folderChildren(parentId) {
-  return store.folders
-    .filter((f) => (f.parentId || null) === (parentId || null))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  return folderTree.value.get(parentId || null) || [];
 }
 
 export function folderPath(id) {
@@ -411,5 +422,6 @@ export function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('tasTheme', next);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', next === 'light' ? '#F7F7F5' : '#191919');
 }
 export const isLight = () => document.documentElement.dataset.theme === 'light';

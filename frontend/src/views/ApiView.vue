@@ -103,7 +103,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen" :style="{ background: 'var(--bg)' }">
+  <div class="min-h-[100dvh]" :style="{ background: 'var(--bg)' }">
     <header class="h-[45px] shrink-0 flex items-center gap-2 px-3 border-b bg-white dark:bg-[#191919] sticky top-0 z-20" :style="{ borderColor: 'var(--border)' }">
       <div class="flex items-center gap-2">
         <span class="w-7 h-7 rounded-[8px] bg-[#37352F] dark:bg-[#E9E9E7] flex items-center justify-center text-white dark:text-[#37352F] text-[12px] font-bold">T</span>
@@ -118,9 +118,9 @@ onMounted(async () => {
       <div class="rounded-[8px] border bg-white dark:bg-[#1F1F1F] overflow-hidden" :style="{ borderColor: 'var(--border)' }">
         <div class="px-4 py-3 border-b flex items-center gap-2" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
           <div class="w-7 h-7 rounded-[6px] bg-[#37352F] dark:bg-[#E9E9E7] flex items-center justify-center text-white dark:text-[#37352F]"><KeyRound :size="14" /></div>
-          <div>
+          <div class="min-w-0">
             <div class="text-[13px] font-semibold" :style="{ color: 'var(--text)' }">API keys</div>
-            <div class="text-[11px]" :style="{ color: 'var(--text-dim)' }">App: <b :style="{ color: 'var(--text)' }">{{ selApp?.name || '—' }}</b> · {{ tokens.length }} keys</div>
+            <div class="text-[11px] truncate" :style="{ color: 'var(--text-dim)' }">App: <b :style="{ color: 'var(--text)' }">{{ selApp?.name || '—' }}</b> · {{ tokens.length }} keys</div>
           </div>
         </div>
 
@@ -132,7 +132,7 @@ onMounted(async () => {
             <button class="btn-primary" @click="create"><Plus :size="14" /> Buat Token</button>
           </div>
 
-          <div v-if="newToken" class="rounded-[6px] border p-3 text-[12px] break-all font-mono flex items-start gap-2" :style="{ background: '#E6F4EA', borderColor: '#A7E0B5', color: '#1A7F37' }">
+          <div v-if="newToken" class="rounded-[6px] p-3 text-[12px] break-all font-mono flex items-start gap-2 chip-ok">
             <Check :size="14" class="shrink-0 mt-0.5" />
             <div>Token baru (disalin): <b>{{ newToken }}</b></div>
           </div>
@@ -148,7 +148,7 @@ onMounted(async () => {
               <component :is="copiedId===t.id ? Check : Copy" :size="12" /> {{ copiedId===t.id ? 'Disalin' : t.token.slice(0,16) + '…' }}
             </button>
             <div class="flex-1 min-w-0">
-              <div class="font-medium text-[13px] flex items-center gap-1.5" :style="{ color: 'var(--text)' }">{{ t.name }} <span v-if="!t.active" class="text-[11px] px-1.5 py-0.5 rounded bg-[#FFF1F1] text-[#E03E3E] border border-[#FFD0D0]">revoked</span></div>
+              <div class="font-medium text-[13px] flex items-center gap-1.5" :style="{ color: 'var(--text)' }">{{ t.name }} <span v-if="!t.active" class="text-[11px] px-1.5 py-0.5 rounded chip-err">revoked</span></div>
               <div class="text-[11px] flex flex-wrap items-center gap-1" :style="{ color: 'var(--text-dim)' }"><Bot :size="10" /> {{ t.profile_name || '—' }} · {{ t.app_name || '—' }} · {{ fmtDateTime(t.created_at) }}</div>
             </div>
             <button class="btn-danger self-start sm:self-auto" @click="del(t.id)"><Trash2 :size="14" /> Hapus</button>
@@ -160,9 +160,9 @@ onMounted(async () => {
       <div class="rounded-[8px] border bg-white dark:bg-[#1F1F1F] overflow-hidden" :style="{ borderColor: 'var(--border)' }">
         <div class="px-4 py-3 border-b flex items-center gap-2" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
           <div class="w-7 h-7 rounded-[6px] bg-[#2383E2] flex items-center justify-center text-white"><HardDrive :size="14" /></div>
-          <div>
+          <div class="min-w-0">
             <div class="text-[13px] font-semibold" :style="{ color: 'var(--text)' }">S3 gateway credentials</div>
-            <div class="text-[11px]" :style="{ color: 'var(--text-dim)' }">1 bot = 1 bucket · Endpoint: <code class="px-1 py-0.5 rounded border text-[11px] font-mono" :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }">{{ locationOrigin }}/s3</code></div>
+            <div class="text-[11px] break-all" :style="{ color: 'var(--text-dim)' }">1 bot = 1 bucket · Endpoint: <code class="px-1 py-0.5 rounded border text-[11px] font-mono" :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }">{{ locationOrigin }}/s3</code></div>
           </div>
         </div>
 
@@ -172,7 +172,7 @@ onMounted(async () => {
             <button class="btn-primary" @click="createS3"><KeyRound :size="14" /> Buat Kredensial</button>
           </div>
 
-          <div v-if="s3New" class="rounded-[6px] border p-3 text-[12px] font-mono break-all" :style="{ background: '#E6F4EA', borderColor: '#A7E0B5', color: '#1A7F37' }">
+          <div v-if="s3New" class="rounded-[6px] p-3 text-[12px] font-mono break-all chip-ok">
             <div class="flex items-center gap-1.5 font-semibold"><Check :size="14" /> Kredensial baru (secret disalin — simpan sekarang):</div>
             <div class="mt-1">bucket: <b>{{ s3New.bucket }}</b> · access: <b>{{ s3New.accessKey }}</b> · secret: <b>{{ s3New.secretKey }}</b></div>
             <pre class="mt-2 p-2.5 rounded-[6px] border overflow-x-auto text-[11px]" :style="{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text)' }">{{ rcloneConfig(s3New) }}</pre>

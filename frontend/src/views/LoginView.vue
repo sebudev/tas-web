@@ -28,9 +28,9 @@ async function login() {
 </script>
 
 <template>
- <div class="min-h-screen flex bg-[var(--bg)] dark:bg-[#191919]">
+ <div class="min-h-[100dvh] flex bg-[var(--bg)] dark:bg-[#191919]">
  <!-- left branding -->
- <div class="hidden lg:flex w-[44%] max-w-[520px] flex-col justify-between p-10 border-r" :style="{ background: '#37352F', borderColor: '#2F2F2F', color: 'var(--card)' }">
+ <div class="hidden lg:flex w-[44%] max-w-[520px] flex-col justify-between p-10 border-r" :style="{ background: '#37352F', borderColor: '#2F2F2F', color: '#F5F5F5' }">
  <div>
  <div class="flex items-center gap-2.5">
  <div class="w-9 h-9 rounded-[10px] bg-white flex items-center justify-center text-[16px]">✈️</div>
@@ -77,7 +77,7 @@ async function login() {
  <label class="text-[12px] font-medium" :style="{ color: 'var(--text)' }">Username</label>
  <input
  v-model="username"
- class="mt-1.5 w-full px-3 py-2.5 rounded-[6px] border text-[14px] outline-none placeholder:text-[#9B9A97] focus:border-[#2383E2] focus:bg-white transition"
+ class="mt-1.5 w-full px-3 py-2.5 rounded-[6px] border text-[14px] outline-none placeholder:text-[#9B9A97] focus:border-[#2383E2] focus:bg-white dark:focus:bg-[#262626] transition"
  :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--text)' }"
  placeholder="admin"
  autocomplete="username"
@@ -93,7 +93,7 @@ async function login() {
  ref="pwInput"
  v-model="password"
  :type="showPw ? 'text' : 'password'"
- class="w-full px-3 py-2.5 pr-9 rounded-[6px] border text-[14px] outline-none placeholder:text-[#9B9A97] focus:border-[#2383E2] focus:bg-white transition"
+ class="w-full px-3 py-2.5 pr-9 rounded-[6px] border text-[14px] outline-none placeholder:text-[#9B9A97] focus:border-[#2383E2] focus:bg-white dark:focus:bg-[#262626] transition"
  :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--text)' }"
  placeholder="••••••••"
  autocomplete="current-password"
