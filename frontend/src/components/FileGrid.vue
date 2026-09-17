@@ -1,5 +1,5 @@
 <script setup>
-import { store } from '../store';
+import { store, PAGE_SIZE } from '../store';
 import { toggleSelectWithShift } from '../composables/useApp';
 import FileCard from './FileCard.vue';
 
@@ -7,8 +7,8 @@ defineProps({ items: { type: Array, default: () => [] } });
 const emit = defineEmits(['open', 'context']);
 
 function onCardClick(f, idx, e) {
- if (store.selectMode || e.shiftKey) {
- toggleSelectWithShift(f, store.page * 24 + idx, e);
+ if (e && (store.selectMode || e.shiftKey)) {
+ toggleSelectWithShift(f, store.page * PAGE_SIZE + idx, e);
  } else emit('open', idx);
 }
 function onContext(payload) { emit('context', payload); }

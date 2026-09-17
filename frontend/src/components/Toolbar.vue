@@ -11,6 +11,12 @@ import { Upload, Link2, FolderPlus, RefreshCw, CheckSquare, Archive, FolderInput
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
 const selCount = computed(() => store.selected.size);
+let searchTimer = null; // debounce: jangan filter+sort seluruh array tiap ketikan
+function onSearchInput() {
+ store.page = 0;
+ clearTimeout(searchTimer);
+ searchTimer = setTimeout(applyFilters, 200);
+}
 
 function onFiles(e) { if (e.target.files.length) enqueueUploads([...e.target.files]); e.target.value = ''; }
 function toggleView() { store.view = store.view === 'grid' ? 'table' : 'grid'; localStorage.setItem('tasView', store.view); }
@@ -45,7 +51,7 @@ function toggleSelectMode() { store.selectMode = !store.selectMode; if (!store.s
  <button class="inline-flex items-center justify-center w-8 h-8 rounded-[6px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="loadFiles" title="Refresh"><RefreshCw :size="14" /></button>
 
  <div class="flex items-center gap-1 ml-1">
- <button v-for="t in [{v:'all',l:'All'},{v:'image',l:'Image'},{v:'video',l:'Video'},{v:'doc',l:'Doc'},{v:'archive',l:'Archive'}]" :key="t.v" class="px-2 py-1 rounded-full text-[11px] font-medium border" :style="store.filterType===t.v ? { background: 'var(--text)', color: '#fff', borderColor: 'var(--text)' } : { background: 'var(--card)', color: 'var(--text-dim)', borderColor: 'var(--border)' }" @click="store.filterType=t.v; applyFilters();">{{t.l}}</button>
+ <button v-for="t in [{v:'all',l:'All'},{v:'image',l:'Image'},{v:'video',l:'Video'},{v:'audio',l:'Audio'},{v:'doc',l:'Doc'},{v:'archive',l:'Archive'}]" :key="t.v" class="px-2 py-1 rounded-full text-[11px] font-medium border" :style="store.filterType===t.v ? { background: 'var(--text)', color: '#fff', borderColor: 'var(--text)' } : { background: 'var(--card)', color: 'var(--text-dim)', borderColor: 'var(--border)' }" @click="store.filterType=t.v; applyFilters();">{{t.l}}</button>
  </div>
 
  <div class="h-5 w-px mx-1" :style="{ background: 'var(--border)' }"></div>
@@ -60,7 +66,7 @@ function toggleSelectMode() { store.selectMode = !store.selectMode; if (!store.s
  <LayoutGrid v-if="store.view !== 'grid'" :size="14" /><List v-else :size="14" />
  </button>
  <div class="relative">
- <input v-model="store.search" class="w-[200px] sm:w-[240px] pl-7 pr-3 py-1.5 rounded-[6px] border bg-[var(--bg)] dark:bg-[#1F1F1F] text-[13px] outline-none focus:bg-white dark:focus:bg-[#262626] focus:border-[#2383E2]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" type="search" placeholder="Search…" @input="store.page = 0; applyFilters()" />
+ <input v-model="store.search" class="w-[200px] sm:w-[240px] pl-7 pr-3 py-1.5 rounded-[6px] border bg-[var(--bg)] dark:bg-[#1F1F1F] text-[13px] outline-none focus:bg-white dark:focus:bg-[#262626] focus:border-[#2383E2]" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" type="search" placeholder="Search…" @input="onSearchInput" />
  <span class="absolute left-2 top-1/2 -translate-y-1/2 opacity-40 pointer-events-none">🔍</span>
  </div>
  <SelectRadix :model-value="store.sort" :options="sortOptions" title="Urutkan" @update:model-value="onSort" />

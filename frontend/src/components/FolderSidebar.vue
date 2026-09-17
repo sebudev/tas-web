@@ -6,7 +6,6 @@ import { confirmDialog } from '../composables/useConfirm';
 import { promptDialog } from '../composables/usePrompt';
 import { toast } from '../composables/useToast';
 import { Folder, Plus, Trash2, Pencil } from '@lucide/vue';
-import FolderSidebar from './FolderSidebar.vue';
 
 const props = defineProps({
  parentId: { type: Number, default: null },

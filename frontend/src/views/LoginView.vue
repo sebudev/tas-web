@@ -4,12 +4,14 @@ import { useRouter } from 'vue-router';
 import { apiPost } from '../composables/useApi';
 import { store } from '../store';
 import { toast } from '../composables/useToast';
+import { Eye, EyeOff, ShieldCheck, FolderTree, Link2 } from '@lucide/vue';
 
 const router = useRouter();
 const username = ref('');
 const password = ref('');
 const busy = ref(false);
 const showPw = ref(false);
+const pwInput = ref(null);
 
 async function login() {
  if (!username.value || !password.value) return toast('Isi username & password', 'err');
@@ -43,9 +45,9 @@ async function login() {
  </p>
 
  <div class="mt-8 space-y-3 text-[13px]">
- <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-[13px]"></span> Enkripsi zero-knowledge — server tidak bisa baca file</div>
- <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-[13px]"></span> Folder virtual & multi-bot workspace</div>
- <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-[13px]"></span> Share link + stream + S3 compatible</div>
+ <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center"><ShieldCheck :size="14" /></span> Enkripsi zero-knowledge — server tidak bisa baca file</div>
+ <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center"><FolderTree :size="14" /></span> Folder virtual & multi-bot workspace</div>
+ <div class="flex items-center gap-2.5 text-white/90"><span class="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center"><Link2 :size="14" /></span> Share link + stream + S3 compatible</div>
  </div>
  </div>
 
@@ -79,7 +81,8 @@ async function login() {
  :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--text)' }"
  placeholder="admin"
  autocomplete="username"
- @keydown.enter="$refs.pwInput?.focus()"
+ autofocus
+ @keydown.enter="pwInput?.focus()"
  />
  </div>
 
@@ -96,7 +99,7 @@ async function login() {
  autocomplete="current-password"
  @keydown.enter="login"
  />
- <button class="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center text-[12px] hover:bg-[var(--bg-2)]" :style="{ color: 'var(--text-dim)' }" @click="showPw = !showPw" :title="showPw ? 'Hide' : 'Show'">{{ showPw ? '🙈' : '' }}</button>
+ <button class="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center hover:bg-[var(--bg-2)]" :style="{ color: 'var(--text-dim)' }" @click="showPw = !showPw" :title="showPw ? 'Sembunyikan password' : 'Tampilkan password'"><EyeOff v-if="showPw" :size="14" /><Eye v-else :size="14" /></button>
  </div>
  </div>
 

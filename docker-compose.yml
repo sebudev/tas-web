@@ -21,6 +21,8 @@ services:
       - TAS_BOT_TOKEN=${TAS_BOT_TOKEN:-}
       # AI model (opencode-go) — key Hermes dari server, tidak pernah ke browser
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
+      # kunci enkripsi secret-at-rest (kosong = auto-generate di /data/.master.key)
+      - TAS_MASTER_KEY=${TAS_MASTER_KEY:-}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
     networks:
       - caddy_default

@@ -2,9 +2,12 @@
 import { ref } from 'vue';
 import { createShare } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { useEscape } from '../composables/useEscape';
+import { X, Share2 } from '@lucide/vue';
 
 const props = defineProps({ file: { type: Object, required: true } });
 const emit = defineEmits(['close']);
+useEscape(() => emit('close'));
 
 const expire = ref(24);
 const maxDl = ref(1);
@@ -26,8 +29,8 @@ async function create() {
 <template>
  <div class="modal-backdrop" @click="emit('close')"></div>
  <div class="fixed inset-0 z-[110] flex items-center justify-center p-5 pointer-events-none">
- <div class="pointer-events-auto w-full max-w-[380px] bg-card border border-line rounded-xl2 p-5 relative">
- <h3 class="text-[15px] mb-1">Share link</h3>
+ <div v-focus-trap role="dialog" aria-modal="true" aria-label="Buat share link" class="pointer-events-auto w-full max-w-[380px] bg-card border border-line rounded-xl2 p-5 relative">
+ <h3 class="text-[15px] font-semibold mb-1 flex items-center gap-2" :style="{ color: 'var(--text)' }"><Share2 :size="16" class="shrink-0" /> Share link</h3>
  <div class="text-xs text-txt-dim mb-2">File: <span class="text-txt">{{ file.filename }}</span></div>
 
  <div class="flex gap-2 mb-2.5">
@@ -41,20 +44,11 @@ async function create() {
  </div>
  </div>
 
- <button class="w-full py-3 rounded-[10px] font-semibold text-white bg-accent hover:brightness-115 disabled:opacity-50" :disabled="busy" @click="create">Buat Link</button>
+ <button class="btn-primary w-full justify-center py-2.5 disabled:opacity-50" :disabled="busy" @click="create">{{ busy ? 'Membuat…' : 'Buat Link' }}</button>
 
- <div v-if="shareUrl" class="mt-2 bg-bg-2 border border-line rounded-lg px-2.5 py-2 text-xs break-all select-all">{{ shareUrl }}</div>
+ <div v-if="shareUrl" class="mt-2 bg-[var(--bg)] border border-line rounded-[6px] px-2.5 py-2 text-xs break-all select-all" :style="{ color: 'var(--text)' }">{{ shareUrl }}</div>
 
- <button class="modal-x" @click="emit('close')">X</button>
+ <button class="dialog-close" @click="emit('close')" aria-label="Tutup"><X :size="16" /></button>
  </div>
  </div>
 </template>
-
-<style scoped>
-.input {
- width: 100%; padding: 10px 12px; box-sizing: border-box;
- border-radius: 10px; border: 1px solid var(--border);
- background: var(--bg-2); color: var(--text); font-size: 13px; outline: none;
-}
-.input:focus { border-color: var(--accent); }
-</style>

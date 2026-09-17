@@ -3,14 +3,14 @@ import { computed } from 'vue';
 import { store } from '../store';
 import { fmtBytes } from '../store';
 import { folderChildren, openFolder, currentAppBots, appById, switchApp, selectBot } from '../composables/useApp';
-import { Folder, FolderOpen, Package, Bot, Star, Plus, Trash2, Files } from '@lucide/vue';
+import { Folder, FolderOpen, Package, Bot, Star, Plus, Trash2, Files, Settings, Menu, ChevronRight } from '@lucide/vue';
 import FolderSidebar from './FolderSidebar.vue';
 
 async function onSwitchApp(id) { await switchApp(id); }
 async function onSelectBot(id) { await selectBot(id); }
 
 const props = defineProps({ collapsed: Boolean });
-const emit = defineEmits(['toggle', 'new-folder', 'open-folder']);
+const emit = defineEmits(['toggle', 'new-folder', 'open-folder', 'new-app', 'app-settings', 'new-bot']);
 
 const appBots = computed(() => currentAppBots());
 const curApp = computed(() => appById(store.currentApp));
@@ -37,7 +37,7 @@ const usagePct = computed(() => {
  :style="{ color: 'var(--text)' }"
  title="Toggle sidebar"
  @click="emit('toggle')"
- >{{ collapsed ? '<ChevronRight :size="14" />' : '<Menu :size="14" />' }}</button>
+ ><ChevronRight v-if="collapsed" :size="14" /><Menu v-else :size="14" /></button>
  <div v-if="!collapsed" class="flex items-center gap-1.5 min-w-0">
  <span class="w-6 h-6 rounded bg-[#37352F] dark:bg-[#E9E9E7] flex items-center justify-center text-white dark:text-[#37352F] text-[11px] font-bold">T</span>
  <span class="font-semibold text-[13.5px] truncate" :style="{ color: 'var(--text)' }">Telegram Storage</span>
@@ -55,17 +55,26 @@ const usagePct = computed(() => {
  @click="openFolder(null)"
  ><span><Files :size="14" /></span> Semua File <span v-if="store.stats" class="ml-auto text-[11px] opacity-60">{{ store.stats.fileCount || 0 }}</span></button>
  <button
- class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[13px] text-left hover:bg-white dark:hover:bg-[#262626]"
+ class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[13px] text-left opacity-50 cursor-not-allowed"
  :style="{ color: 'var(--text-dim)' }"
- @click="store.currentFolder = null"
- ><span><Star :size="14" /></span> Favorit <span class="ml-auto text-[10px] opacity-40">soon</span></button>
+ disabled
+ title="Segera hadir"
+ ><span><Star :size="14" /></span> Favorit <span class="ml-auto text-[10px] opacity-60">segera</span></button>
  </div>
 
  <!-- Apps -->
  <div class="px-2">
  <div class="flex items-center justify-between px-2 mb-1.5">
  <span class="text-[11px] font-semibold tracking-wide uppercase" :style="{ color: 'var(--text-dim)' }">Apps</span>
+ <div class="flex items-center gap-1">
  <span class="text-[11px] px-1.5 py-0.5 rounded bg-white dark:bg-[#2A2A2A] border" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }">{{ store.apps.length }}</span>
+ <button
+ class="w-6 h-6 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
+ :style="{ color: 'var(--text-dim)' }"
+ title="App baru"
+ @click="emit('new-app')"
+ ><Plus :size="12" /></button>
+ </div>
  </div>
  <div class="space-y-0.5">
  <button
@@ -82,15 +91,31 @@ const usagePct = computed(() => {
  <span class="text-[10px] opacity-60 shrink-0">{{ a.botCount || 0 }} bot</span>
  </button>
  </div>
- <div v-if="curApp" class="mt-2 px-2 py-2 rounded bg-white dark:bg-[#262626] border" :style="{ borderColor: 'var(--border)' }">
- <div class="text-[11px] font-medium" :style="{ color: 'var(--text)' }">{{ curApp.name }}</div>
- <div class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ appBots.length }} bot · {{ curApp.bots?.length || 0 }} attached</div>
+ <div v-if="curApp" class="mt-2 px-2 py-2 rounded bg-white dark:bg-[#262626] border flex items-center gap-2" :style="{ borderColor: 'var(--border)' }">
+ <div class="min-w-0 flex-1">
+ <div class="text-[11px] font-medium truncate" :style="{ color: 'var(--text)' }">{{ curApp.name }}</div>
+ <div class="text-[11px] truncate" :style="{ color: 'var(--text-dim)' }">{{ appBots.length }} bot · {{ curApp.bots?.length || 0 }} attached</div>
+ </div>
+ <button
+ class="shrink-0 w-6 h-6 rounded flex items-center justify-center hover:bg-[var(--bg)] dark:hover:bg-[#333] border border-transparent hover:border-[#E9E9E7]"
+ :style="{ color: 'var(--text-dim)' }"
+ title="Kelola app (rename, bot, hapus)"
+ @click="emit('app-settings')"
+ ><Settings :size="12" /></button>
  </div>
  </div>
 
  <!-- Bots -->
  <div class="px-2">
- <div class="text-[11px] font-semibold tracking-wide uppercase px-2 mb-1.5" :style="{ color: 'var(--text-dim)' }">Bots</div>
+ <div class="flex items-center justify-between px-2 mb-1.5">
+ <span class="text-[11px] font-semibold tracking-wide uppercase" :style="{ color: 'var(--text-dim)' }">Bots</span>
+ <button
+ class="w-6 h-6 rounded flex items-center justify-center hover:bg-white dark:hover:bg-[#2A2A2A] border border-transparent hover:border-[#E9E9E7]"
+ :style="{ color: 'var(--text-dim)' }"
+ title="Tambah bot"
+ @click="emit('new-bot')"
+ ><Plus :size="12" /></button>
+ </div>
  <div class="space-y-0.5">
  <button
  v-for="p in appBots"
@@ -100,7 +125,7 @@ const usagePct = computed(() => {
  :class="store.activeId !== p.id || store.allBots ? 'hover:bg-white dark:hover:bg-[#262626] border border-transparent' : ''"
  @click="onSelectBot(p.id)"
  >
- <span class="shrink-0">{{ p.initialized ? '<Bot :size="14" />' : '<Bot :size="14" class="opacity-40" />' }}</span>
+ <span class="shrink-0"><Bot :size="14" :class="p.initialized ? '' : 'opacity-40'" /></span>
  <span class="truncate flex-1">{{ p.name }}</span>
  <span v-if="p.botUsername" class="text-[11px] opacity-60 truncate">@{{ p.botUsername }}</span>
  </button>
@@ -125,7 +150,7 @@ const usagePct = computed(() => {
  @click="emit('new-folder')"
  ><Plus :size="12" /></button>
  </div>
- <div v-if="!rootChildren.length" class="px-2 py-2 text-[12px] rounded border border-dashed" :style="{ color: 'var(--text-dim)', borderColor: 'var(--border)', background: '#FFFFFF' }">
+ <div v-if="!rootChildren.length" class="px-2 py-2 text-[12px] rounded border border-dashed" :style="{ color: 'var(--text-dim)', borderColor: 'var(--border)', background: 'var(--bg)' }">
  Belum ada folder. Klik <Plus :size="12" /> untuk buat.
  </div>
  <FolderSidebar v-else />
@@ -134,14 +159,14 @@ const usagePct = computed(() => {
 
  <!-- collapsed mini -->
  <div v-else class="flex-1 overflow-y-auto py-3 flex flex-col items-center gap-2">
- <button class="w-8 h-8 rounded bg-[#37352F] text-white flex items-center justify-center text-[13px]"><Files :size="14" /></button>
- <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]"><Package :size="14" /></button>
- <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]"><Bot :size="14" /></button>
- <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]"><Folder :size="14" /></button>
+ <button class="w-8 h-8 rounded bg-[#37352F] text-white flex items-center justify-center text-[13px]" title="Semua File" @click="openFolder(null)"><Files :size="14" /></button>
+ <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]" :style="{ color: 'var(--text-dim)' }" title="Bentangkan sidebar (Apps)" @click="emit('toggle')"><Package :size="14" /></button>
+ <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]" :style="{ color: 'var(--text-dim)' }" title="Bentangkan sidebar (Bots)" @click="emit('toggle')"><Bot :size="14" /></button>
+ <button class="w-8 h-8 rounded hover:bg-white dark:hover:bg-[#262626] flex items-center justify-center text-[14px]" :style="{ color: 'var(--text-dim)' }" title="Bentangkan sidebar (Folders)" @click="emit('toggle')"><Folder :size="14" /></button>
  </div>
 
  <!-- storage footer -->
- <div v-if="!collapsed" class="p-3 border-t shrink-0" :style="{ borderColor: 'var(--border)', background: '#FFFFFF' }">
+ <div v-if="!collapsed" class="p-3 border-t shrink-0" :style="{ borderColor: 'var(--border)', background: 'var(--card)' }">
  <div class="flex items-center justify-between text-[11px] mb-1.5">
  <span :style="{ color: 'var(--text-dim)' }">Storage</span>
  <span class="font-medium" :style="{ color: 'var(--text)' }">{{ fmtBytes(store.stats?.totalSize) }}</span>

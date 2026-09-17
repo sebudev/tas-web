@@ -1,5 +1,8 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { Eye, Download, Copy, Share2, FolderInput, Info, Trash2 } from '@lucide/vue';
+
+const iconMap = { Eye, Download, Copy, Share2, FolderInput, Info, Trash2 };
 
 const props = defineProps({
  items: { type: Array, default: () => [] },
@@ -24,7 +27,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
  @click.stop
  >
  <button v-for="it in items" :key="it.key" class="w-full text-left px-3 py-1.5 text-[13px] flex items-center gap-2 hover:bg-[#F7F7F5] dark:hover:bg-[#333]" :style="{ color: it.danger ? '#E03E3E' : 'var(--text)' }" @click="onAction(it.key)">
- <span>{{ it.icon }}</span> {{ it.label }}
+ <component :is="iconMap[it.icon]" :size="14" /> {{ it.label }}
  </button>
  </div>
 </template>

@@ -31,7 +31,7 @@ async function loadTokens() {
     const q = store.currentApp ? `?appId=${store.currentApp}` : '';
     const data = await apiGet('/api/tokens' + q);
     tokens.value = data.tokens || [];
-  } catch {}
+  } catch (e) { toast('Gagal memuat token: ' + e.message, 'err'); }
 }
 async function onSwitchApp(v) {
   if (v) { await switchApp(Number(v)); botTarget.value = null; loadTokens(); }
@@ -57,7 +57,9 @@ async function create() {
   } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 async function copyToken(t) {
-  const ok = await copyText(t.token);
+  let full = t.token;
+  try { const d = await apiGet('/api/tokens/' + t.id + '/reveal'); full = d.token; } catch {}
+  const ok = await copyText(full);
   if (!ok) return toast('Gagal menyalin', 'err');
   copiedId.value = t.id;
   setTimeout(() => { if (copiedId.value === t.id) copiedId.value = null; }, 1500);
@@ -69,7 +71,7 @@ async function del(id) {
   try { await apiDelete('/api/tokens/' + id); toast('Token dihapus', 'ok'); loadTokens(); } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 async function loadS3() {
-  try { const data = await apiGet('/api/s3'); s3Creds.value = data.creds || []; } catch {}
+  try { const data = await apiGet('/api/s3'); s3Creds.value = data.creds || []; } catch (e) { toast('Gagal memuat kredensial S3: ' + e.message, 'err'); }
 }
 async function createS3() {
   const pid = s3BotTarget.value;

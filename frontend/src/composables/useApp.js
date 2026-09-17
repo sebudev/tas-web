@@ -1,9 +1,10 @@
 import { computed } from 'vue';
 import { store, PAGE_SIZE } from '../store';
 import { apiGet, apiPost, apiDelete } from './useApi';
-import { toast } from './useToast';
+import { toast, dismissKey } from './useToast';
 
 // ---------- files: load/filter/sort/paginate ----------
+let lastLoadErrAt = 0;
 export async function loadFiles() {
   store.loading = true;
   try {
@@ -12,8 +13,15 @@ export async function loadFiles() {
     store.files = data.files || [];
     store.page = 0;
     store.selected.clear();
+    store.selectMode = false;
     applyFilters();
-  } catch (e) { /* toast handled by caller */ }
+  } catch (e) {
+    // jangan diam-diam: kasih tahu user, tapi throttle biar tidak spam saat server down
+    if (e.status !== 401 && Date.now() - lastLoadErrAt > 10000) {
+      lastLoadErrAt = Date.now();
+      toast('Gagal memuat file: ' + e.message, 'err');
+    }
+  }
   store.loading = false;
 }
 
@@ -174,7 +182,7 @@ export function appById(id) {
 export function currentAppBots() {
   const app = appById(store.currentApp);
   if (!app) return [];
-  return store.profiles.filter((p) => app.bots.includes(p.id));
+  return store.profiles.filter((p) => (app.bots || []).includes(p.id));
 }
 
 function ensureActiveBot() {
@@ -201,6 +209,7 @@ export async function switchApp(id) {
   store.allBots = false;
   store.page = 0;
   store.currentFolder = null;
+  store.search = ''; // jangan bawa kata kunci dari app sebelumnya
   clearSelection();
   ensureActiveBot();
   await syncActiveBot(); // server ikut pindah ke bot pertama di app ini
@@ -279,11 +288,13 @@ function uploadOne(file) {
     fd.append('files', file);
     if (store.currentFolder) fd.append('folderId', store.currentFolder);
     const xhr = new XMLHttpRequest();
+    const tkey = 'up-' + file.name + '-' + file.size;
     xhr.open('POST', '/api/upload');
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) toast('⬆ ' + file.name + ' — ' + Math.round((e.loaded / e.total) * 100) + '%', 'running');
+      if (e.lengthComputable) toast('⬆ ' + file.name + ' — ' + Math.round((e.loaded / e.total) * 100) + '%', 'running', tkey);
     };
     xhr.onload = () => {
+      dismissKey(tkey);
       try {
         const data = JSON.parse(xhr.responseText);
         if (data.jobs && data.jobs.length) {
@@ -295,19 +306,20 @@ function uploadOne(file) {
         resolve();
       } catch (err) { reject(err); }
     };
-    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.onerror = () => { dismissKey(tkey); reject(new Error('Network error')); };
     xhr.send(fd);
   });
 }
 
 // ---------- jobs ----------
+let pollTimer = null; // guard: hanya satu loop polling aktif (cegah loop ganda)
 export async function pollJobs() {
   try {
     const { jobs } = await apiGet('/api/jobs');
     store.jobs = jobs || [];
     const active = store.jobs.filter((j) => j.status === 'running');
     if (active.length || store.uploading || store.uploadQueue.length) {
-      setTimeout(pollJobs, 2500);
+      if (!pollTimer) pollTimer = setTimeout(() => { pollTimer = null; pollJobs(); }, 2500);
     } else if (store.jobs.length) {
       const last = store.jobs[store.jobs.length - 1];
       if (last.status === 'done') { toast(last.message, 'ok'); loadFiles(); loadFolders(); }
@@ -332,7 +344,7 @@ export async function uploadUrl(url) {
 export async function deleteFiles(ids) {
   let ok = 0;
   for (let i = 0; i < ids.length; i++) {
-    toast('🗑 Menghapus ' + (i + 1) + '/' + ids.length + '...', 'running');
+    toast('🗑 Menghapus ' + (i + 1) + '/' + ids.length + '...', 'running', 'delete-batch');
     try {
       // view "Semua Bot": file bisa berasal dari bot berbeda → cari profileId-nya
       const f = store.files.find((x) => x.hash === ids[i]);
@@ -371,7 +383,8 @@ export async function moveFiles(hashes, folderId) {
 }
 
 export async function createShare(file, expire, maxDl) {
-  const data = await apiPost('/api/share/' + encodeURIComponent(file.hash), { expire, maxDownloads: maxDl });
+  const q = file.profileId ? `?profileId=${file.profileId}` : '';
+  const data = await apiPost('/api/share/' + encodeURIComponent(file.hash) + q, { expire, maxDownloads: maxDl });
   return data;
 }
 

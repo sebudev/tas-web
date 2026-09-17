@@ -10,6 +10,8 @@ const { Readable } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
 const archiver = require('archiver');
 const Database = require('better-sqlite3');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -29,8 +31,108 @@ const DB_PATH = path.join(TAS_DATA_DIR, 'tas.db');
 
 for (const d of [TMP_DIR, DL_DIR, CACHE_DIR]) fs.mkdirSync(d, { recursive: true });
 
+// ---------------- secret-at-rest (AES-256-GCM) ----------------
+// Kunci master: env TAS_MASTER_KEY, atau file .master.key di data dir (0600, dibuat otomatis).
+// Dipakai mengenkripsi password bot & secret S3 supaya tidak plaintext di SQLite.
+function loadMasterKey() {
+  const env = process.env.TAS_MASTER_KEY;
+  if (env) return crypto.createHash('sha256').update(String(env)).digest();
+  const kf = path.join(TAS_DATA_DIR, '.master.key');
+  try {
+    const hex = fs.readFileSync(kf, 'utf8').trim();
+    if (/^[0-9a-f]{64}$/i.test(hex)) return Buffer.from(hex, 'hex');
+  } catch {}
+  const key = crypto.randomBytes(32);
+  fs.writeFileSync(kf, key.toString('hex'), { mode: 0o600 });
+  console.log('🔑 master key dibuat: ' + kf);
+  return key;
+}
+const MASTER_KEY = loadMasterKey();
+
+function encryptSecret(plain) {
+  if (plain == null || plain === '') return '';
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', MASTER_KEY, iv);
+  const ct = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return 'v2:' + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function decryptSecret(stored) {
+  if (!stored) return '';
+  const s = String(stored);
+  if (!s.startsWith('v2:')) return s; // baris legacy (plaintext) — dibiarkan apa adanya
+  try {
+    const b = Buffer.from(s.slice(3), 'base64');
+    const iv = b.subarray(0, 12), tag = b.subarray(12, 28), ct = b.subarray(28);
+    const d = crypto.createDecipheriv('aes-256-gcm', MASTER_KEY, iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  } catch { return ''; }
+}
+const profPassword = (p) => decryptSecret(p?.password);
+
+// ---------------- SSRF guard (upload dari URL) ----------------
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const p = ip.split('.').map(Number);
+    if (p[0] === 0 || p[0] === 10 || p[0] === 127) return true;
+    if (p[0] === 169 && p[1] === 254) return true; // link-local / cloud metadata
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+    if (p[0] === 192 && p[1] === 168) return true;
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true; // CGNAT
+    if (p[0] >= 224) return true; // multicast/reserved
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const l = ip.toLowerCase();
+    if (l === '::1' || l === '::') return true;
+    if (l.startsWith('fc') || l.startsWith('fd')) return true; // unique local
+    if (l.startsWith('fe80')) return true; // link-local
+    if (l.startsWith('::ffff:')) return isPrivateIp(l.slice(7));
+    return false;
+  }
+  return true; // tidak dikenali → tolak
+}
+async function assertPublicUrl(u) {
+  let parsed;
+  try { parsed = new URL(u); } catch { throw new Error('URL tidak valid'); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('hanya http/https');
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host)) {
+    if (isPrivateIp(host)) throw new Error('host internal tidak diizinkan');
+    return parsed;
+  }
+  const addrs = await dns.lookup(host, { all: true });
+  if (!addrs.length) throw new Error('host tidak bisa di-resolve');
+  for (const a of addrs) if (isPrivateIp(a.address)) throw new Error('host internal tidak diizinkan');
+  return parsed;
+}
+// fetch dgn validasi SSRF di SETIAP hop redirect (redirect: manual)
+async function safeFetch(url, maxRedirects = 5) {
+  let cur = url;
+  for (let i = 0; i <= maxRedirects; i++) {
+    await assertPublicUrl(cur);
+    const r = await fetch(cur, { redirect: 'manual', signal: AbortSignal.timeout(30000) });
+    if ([301, 302, 303, 307, 308].includes(r.status)) {
+      const loc = r.headers.get('location');
+      if (!loc) return r;
+      cur = new URL(loc, cur).toString();
+      continue;
+    }
+    return r;
+  }
+  throw new Error('terlalu banyak redirect');
+}
+
 const app = express();
+app.disable('x-powered-by');
 app.use(express.json());
+
+// perbandingan rahasia constant-time (cegah timing attack pada ===)
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
 
 // CORS: untuk integrasi API dari app lain
 app.use('/api', (req, res, next) => {
@@ -84,7 +186,7 @@ function parseCookies(req) {
 
 function getSessionUser(req) {
   const auth = req.headers.authorization || '';
-  if (API_TOKEN && auth === 'Bearer ' + API_TOKEN) return { user_id: 0, username: 'api' };
+  if (API_TOKEN && safeEqual(auth, 'Bearer ' + API_TOKEN)) return { user_id: 0, username: 'api' };
   const token = parseCookies(req).tas_session || auth.replace(/^Bearer /, '');
   if (!token) return null;
   return db.prepare(`SELECT s.user_id, u.username FROM sessions s JOIN users u ON u.id=s.user_id
@@ -94,6 +196,27 @@ function getSessionUser(req) {
 app.use((req, res, next) => {
   als.run(resolveAuth(req), () => next());
 });
+
+// endpoint yang boleh diakses token API per-bot (integrasi storage).
+// Sisanya (manajemen bot/app, /api/tokens, /api/s3, AI settings, cache, dll)
+// hanya boleh dari sesi login web / API_TOKEN global — cegah token bot jadi admin.
+const TOKEN_ROUTES = [
+  /^\/api\/me$/,
+  /^\/api\/status$/,
+  /^\/api\/stats$/,
+  /^\/api\/files(\/|$)/,
+  /^\/api\/folders(\/|$)/,
+  /^\/api\/stream\//,
+  /^\/api\/download\//,
+  /^\/api\/jobs$/,
+  /^\/api\/upload(\/|$)/,
+  /^\/api\/upload-url$/,
+  /^\/api\/delete\//,
+  /^\/api\/share\//,
+  /^\/api\/zip$/,
+  /^\/api\/s3\/presign$/,
+];
+const tokenRouteAllowed = (req) => TOKEN_ROUTES.some((re) => re.test(req.path));
 
 function requireAuth(req, res, next) {
   if (!authEnabled) return next();
@@ -105,11 +228,18 @@ function requireAuth(req, res, next) {
               req.path.startsWith('/api/me');
   // file statis (html/css/js/img/font) publik — tidak ada data sensitif
   const ext = path.extname(req.path).toLowerCase();
-  const isStatic = req.method === 'GET' &&
+  // hanya file statis di luar /api yang publik — kalau tidak, path API yang
+  // kebetulan berakhiran .js/.jpg (mis. /api/download/x.js) lolos auth
+  const isStatic = req.method === 'GET' && !req.path.startsWith('/api/') &&
     ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
      '.woff', '.woff2', '.ttf', '.eot', '.map'].includes(ext);
   if (pub || isStatic) return next();
-  if (ctx.user) return next();
+  if (ctx.user) {
+    if (ctx.scoped && !tokenRouteAllowed(req)) {
+      return res.status(403).json({ error: 'Token bot tidak punya akses ke endpoint ini' });
+    }
+    return next();
+  }
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   // halaman SPA (shell) publik — tidak ada data sensitif; auth di-handle client-side
   return next();
@@ -127,11 +257,11 @@ function resolveAuth(req) {
       if (prof) {
         const app = row.app_id ? db.prepare('SELECT * FROM apps WHERE id=?').get(row.app_id) : null;
         try { db.prepare('UPDATE api_tokens SET last_used_at=? WHERE id=?').run(Date.now(), row.id); } catch {}
-        return { app, profile: prof, user: { user_id: 0, username: 'api:' + (row.name || 'bot') } };
+        return { app, profile: prof, scoped: true, user: { user_id: 0, username: 'api:' + (row.name || 'bot') } };
       }
     }
   }
-  return { profile: null, user: getSessionUser(req) };
+  return { profile: null, scoped: false, user: getSessionUser(req) };
 }
 
 // ---------------- multi-bot profiles ----------------
@@ -151,7 +281,7 @@ function seedDefaultProfile() {
   if (n > 0) return;
   const hasConfig = fs.existsSync(path.join(TAS_DATA_DIR, 'config.json'));
   db.prepare('INSERT INTO profiles (name, bot_username, data_dir, password, initialized, is_active, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run('Default', '', TAS_DATA_DIR, TAS_PASSWORD, hasConfig ? 1 : 0, 1, Date.now());
+    .run('Default', '', TAS_DATA_DIR, encryptSecret(TAS_PASSWORD), hasConfig ? 1 : 0, 1, Date.now());
   console.log('🌱 seed profile Default (data: ' + TAS_DATA_DIR + (hasConfig ? ', sudah init' : '') + ')');
 }
 seedDefaultProfile();
@@ -160,6 +290,17 @@ for (const p of db.prepare('SELECT * FROM profiles').all()) {
   if (!p.initialized && fs.existsSync(path.join(p.data_dir, 'config.json'))) {
     db.prepare('UPDATE profiles SET initialized=1 WHERE id=?').run(p.id);
   }
+}
+// migrasi one-time: password profil yang masih plaintext → enkripsi
+{
+  let n = 0;
+  for (const p of db.prepare('SELECT * FROM profiles').all()) {
+    if (p.password && !String(p.password).startsWith('v2:')) {
+      db.prepare('UPDATE profiles SET password=? WHERE id=?').run(encryptSecret(p.password), p.id);
+      n++;
+    }
+  }
+  if (n) console.log(`🔐 ${n} password profil dienkripsi (migrasi)`);
 }
 
 let activeProfile = db.prepare('SELECT * FROM profiles WHERE is_active=1').get() ||
@@ -176,7 +317,7 @@ function tasEnv(profile) {
   const ctx = als.getStore() || {};
   const p = profile || ctx.profile || activeProfile;
   if (!p) return { ...process.env, TAS_PASSWORD, TAS_DATA_DIR };
-  return { ...process.env, TAS_PASSWORD: p.password || '', TAS_DATA_DIR: p.data_dir };
+  return { ...process.env, TAS_PASSWORD: profPassword(p), TAS_DATA_DIR: p.data_dir };
 }
 
 function toProfile(p) {
@@ -228,7 +369,7 @@ app.post('/api/profiles/:id/init', (req, res) => {
   const existing = initJobs.get(p.id);
   if (existing && existing.status === 'running') return res.status(400).json({ error: 'Init sedang berjalan' });
 
-  db.prepare('UPDATE profiles SET password=? WHERE id=?').run(password, p.id);
+  db.prepare('UPDATE profiles SET password=? WHERE id=?').run(encryptSecret(password), p.id);
   stopBotIngest(p.id); // jeda polling bot ini dulu (tas init pakai getUpdates utk waitForChatId)
   const job = { status: 'running', message: 'Menghubungkan ke Telegram...', botUsername: '' };
   initJobs.set(p.id, job);
@@ -249,6 +390,7 @@ app.post('/api/profiles/:id/init', (req, res) => {
   child.on('error', (err) => {
     job.status = 'error';
     job.message = err.message;
+    startBotIngest(); // polling sempat dijeda di atas → hidupkan lagi profile lain
   });
   child.on('close', (code) => {
     if (code === 0) {
@@ -261,6 +403,7 @@ app.post('/api/profiles/:id/init', (req, res) => {
     } else {
       job.status = 'error';
       job.message = out.slice(-220) || ('exit ' + code);
+      startBotIngest(); // init gagal → jangan biarkan polling bot ini mati permanen
     }
     // job sengaja DIPERTAHANKAN di map (terminal state) — biar error/done
     // terakhir masih kebaca; di-overwrite saat init berikutnya
@@ -379,9 +522,51 @@ function parseTasJson(stdout) {
   return JSON.parse(i >= 0 ? s.slice(i) : s);
 }
 
-async function findRecord(id, profile = null) {
+// ---------- cache hasil `tas list` / `tas status` (TTL pendek) ----------
+// tiap panggilan tanpa cache = spawn proses CLI baru; ini memangkas spawn
+// berulang saat banyak request (list files, preview, download, stats) berturut-turut.
+const tasCache = new Map(); // key -> { at, data }
+const TAS_TTL = 4000;
+function effProfileId(profile) {
+  if (profile?.id) return profile.id;
+  const ctx = als.getStore() || {};
+  return ctx.profile?.id ?? activeProfile?.id ?? 'x';
+}
+function cacheGet(key, ttl) {
+  const e = tasCache.get(key);
+  return e && Date.now() - e.at < ttl ? e.data : null;
+}
+function cacheSet(key, data) {
+  tasCache.set(key, { at: Date.now(), data });
+  if (tasCache.size > 200) {
+    const cut = Date.now() - 60000;
+    for (const [k, v] of tasCache) if (v.at < cut) tasCache.delete(k);
+  }
+}
+function invalidateTasCache() { tasCache.clear(); }
+
+async function tasList(profile = null) {
+  const key = 'list:' + effProfileId(profile);
+  const c = cacheGet(key, TAS_TTL);
+  if (c) return c;
   const { stdout } = await runTas(['list', '--json'], 900000, profile);
-  return parseTasJson(stdout).find((f) => f.hash === id || f.filename === id) || null;
+  const data = parseTasJson(stdout);
+  cacheSet(key, data);
+  return data;
+}
+async function tasStatus(profile = null) {
+  const key = 'status:' + effProfileId(profile);
+  const c = cacheGet(key, TAS_TTL);
+  if (c) return c;
+  const { stdout } = await runTas(['status', '--json'], 900000, profile);
+  const data = parseTasJson(stdout);
+  cacheSet(key, data);
+  return data;
+}
+
+async function findRecord(id, profile = null) {
+  const all = await tasList(profile);
+  return (Array.isArray(all) ? all : []).find((f) => f.hash === id || f.filename === id) || null;
 }
 
 // ---------------- jobs ----------------
@@ -420,11 +605,12 @@ function pushJob(job, filePath, name, folderId, onDone, profile) {
       }
       logActivity('upload', name);
       finishJob(job, null, `Upload selesai: ${name}`);
+      invalidateTasCache(); // list berubah → buang cache biar file baru langsung terlihat
     } else {
       job.tmpPath = filePath; // simpan utk retry
       finishJob(job, new Error(`tas push gagal (exit ${code}): ${outTail.slice(-300)}`));
     }
-    if (onDone) onDone(job);
+    if (onDone) Promise.resolve().then(() => onDone(job)).catch(() => {});
   });
 }
 
@@ -458,11 +644,12 @@ function decryptBotToken(profile) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(profile.data_dir, 'config.json'), 'utf8'));
     if (cfg.botToken) return cfg.botToken; // config v1 (plaintext)
-    if (cfg.encryptedBotToken && profile.password) {
+    const pw = profPassword(profile);
+    if (cfg.encryptedBotToken && pw) {
       const b = Buffer.from(cfg.encryptedBotToken, 'base64');
       const salt = b.subarray(0, 32), iv = b.subarray(32, 44);
       const tag = b.subarray(-16), ct = b.subarray(44, -16);
-      const key = crypto.pbkdf2Sync(profile.password, salt, 600000, 32, 'sha512');
+      const key = crypto.pbkdf2Sync(pw, salt, 600000, 32, 'sha512');
       const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
       d.setAuthTag(tag);
       return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
@@ -508,10 +695,14 @@ async function startBotIngest() {
       console.log(`📥 Bot ingest: token bot tidak ditemukan utk profile "${prof.name}"`);
       continue;
     }
+    // reserve slot SEBELUM await → dua startBotIngest() konkuren tidak bisa
+    // sama-sama lolos cek `has()` dan bikin poller ganda (getUpdates berebut offset)
+    const p = { token, botId: null, profileId: prof.id, offset: 0, processed: new Set(), stopped: false };
+    botPolls.set(prof.id, p);
     try {
       const me = await tgApi(token, 'getMe', {}, 15000);
-      const p = { token, botId: me.id, profileId: prof.id, offset: 0, processed: new Set(), stopped: false };
-      botPolls.set(prof.id, p);
+      if (botPolls.get(prof.id) !== p) continue; // di-stop saat await
+      p.botId = me.id;
       // sinkronisasi offset ke update terbaru → pesan lama tidak diproses ulang
       try {
         const last = await tgApi(token, 'getUpdates', { offset: -1, timeout: 1 });
@@ -520,6 +711,7 @@ async function startBotIngest() {
       console.log(`📥 Bot ingest aktif: @${me.username} → profile "${prof.name}" (file ≤20MB, pesan asli dihapus setelah tersimpan)`);
       pollLoop(prof.id);
     } catch (e) {
+      if (botPolls.get(prof.id) === p) botPolls.delete(prof.id); // biar bisa retry
       console.log(`⚠️ Bot ingest "${prof.name}": getMe gagal — ` + e.message.slice(0, 120));
     }
   }
@@ -646,12 +838,30 @@ async function handleIncomingMessage(p, msg) {
 }
 
 // ---------------- auth API ----------------
+const loginAttempts = new Map(); // ip -> { count, resetAt } — throttle brute force
+const LOGIN_MAX = 10, LOGIN_WINDOW = 60 * 1000;
+function loginBlocked(ip) {
+  const rec = loginAttempts.get(ip);
+  return !!(rec && Date.now() < rec.resetAt && rec.count >= LOGIN_MAX);
+}
+function loginFailed(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip);
+  const next = (rec && now < rec.resetAt) ? rec : { count: 0, resetAt: now + LOGIN_WINDOW };
+  next.count++;
+  loginAttempts.set(ip, next);
+  if (loginAttempts.size > 5000) for (const [k, v] of loginAttempts) if (now > v.resetAt) loginAttempts.delete(k);
+}
 app.post('/api/login', (req, res) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'x';
+  if (loginBlocked(ip)) return res.status(429).json({ error: 'Terlalu banyak percobaan login, coba lagi nanti' });
   const { username, password } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE username=?').get(username || '');
-  if (!user || hashPassword(password || '', user.salt) !== user.pass_hash) {
+  if (!user || !safeEqual(hashPassword(password || '', user.salt), user.pass_hash)) {
+    loginFailed(ip);
     return res.status(401).json({ error: 'Username atau password salah' });
   }
+  loginAttempts.delete(ip);
   const token = crypto.randomBytes(32).toString('hex');
   db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)')
     .run(token, user.id, Date.now() + 30 * 24 * 3600 * 1000, Date.now());
@@ -695,11 +905,26 @@ CREATE TABLE IF NOT EXISTS app_profiles (
   profile_id INTEGER NOT NULL,
   PRIMARY KEY (app_id, profile_id)
 );`);
-// kolom app_id utk api_tokens & folders (kalau belum ada — migrasi)
+// tabel folders/folder_files WAJIB dibuat sebelum migrasi kolom di bawah —
+// fresh install: tabel belum ada, ALTER TABLE akan crash ("no such table")
+db.exec(`CREATE TABLE IF NOT EXISTS folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER,
+  created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS folder_files (
+  folder_id INTEGER NOT NULL,
+  file_hash TEXT PRIMARY KEY,
+  added_at INTEGER
+);`);
+// kolom app_id utk api_tokens, folders & profile_id utk shares (migrasi)
 const tokCols = db.prepare('PRAGMA table_info(api_tokens)').all();
 if (!tokCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE api_tokens ADD COLUMN app_id INTEGER');
 const folderCols = db.prepare('PRAGMA table_info(folders)').all();
 if (!folderCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE folders ADD COLUMN app_id INTEGER');
+const shareCols = db.prepare('PRAGMA table_info(shares)').all();
+if (!shareCols.some((c) => c.name === 'profile_id')) db.exec('ALTER TABLE shares ADD COLUMN profile_id INTEGER');
 
 function seedDefaultApp() {
   if (db.prepare('SELECT COUNT(*) c FROM apps').get().c > 0) return;
@@ -732,19 +957,15 @@ function appIdFor(req) {
 }
 
 // ---------------- folders (virtual, model Google Drive) ----------------
-// File asli tetap di Telegram (flat). Folder = layer organisasi di SQLite:
-// folder bertingkat (parent_id), 1 file (by hash) maksimal di 1 folder.
-db.exec(`CREATE TABLE IF NOT EXISTS folders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  parent_id INTEGER,
-  created_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS folder_files (
-  folder_id INTEGER NOT NULL,
-  file_hash TEXT PRIMARY KEY,
-  added_at INTEGER
-);`);
+// File asli tetap di Telegram (flat). Folder = layer organisasi di SQLite.
+// (CREATE TABLE folders/folder_files sudah dijalankan lebih awal, sebelum migrasi app_id.)
+
+// index utk query panas (activity feed, cek sesi, folder per app, lookup konfirmasi ingest)
+db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_folders_app ON folders(app_id);
+CREATE INDEX IF NOT EXISTS idx_folder_files_folder ON folder_files(folder_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_hash ON ingest_confirmations(file_hash, profile_id);`);
 
 app.get('/api/folders', (req, res) => {
   const appId = appIdFor(req);
@@ -855,6 +1076,11 @@ app.post('/api/files/folder', (req, res) => {
   res.json({ ok: true, count: hashes.length, folderId });
 });
 
+// token dikembalikan TERMASKER — nilai penuh hanya via /reveal (sesi login) atau saat dibuat
+function maskToken(t) {
+  const s = String(t || '');
+  return s.length <= 16 ? s : s.slice(0, 10) + '…' + s.slice(-4);
+}
 app.get('/api/tokens', (req, res) => {
   const appId = parseInt(req.query.appId, 10) || null;
   const base = `SELECT t.id, t.token, t.name, t.profile_id, p.name AS profile_name, t.active, t.created_at, t.last_used_at, t.app_id,
@@ -862,7 +1088,14 @@ app.get('/api/tokens', (req, res) => {
   const rows = appId
     ? db.prepare(base + ' WHERE t.app_id=? ORDER BY t.id DESC').all(appId)
     : db.prepare(base + ' ORDER BY t.id DESC').all();
-  res.json({ tokens: rows });
+  res.json({ tokens: rows.map((r) => ({ ...r, token: maskToken(r.token) })) });
+});
+
+// reveal nilai penuh satu token (admin/web saja — token bot diblokir di requireAuth)
+app.get('/api/tokens/:id/reveal', (req, res) => {
+  const row = db.prepare('SELECT token FROM api_tokens WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Token tidak ditemukan' });
+  res.json({ token: row.token });
 });
 
 app.post('/api/tokens', (req, res) => {
@@ -894,10 +1127,9 @@ app.delete('/api/tokens/:id', (req, res) => {
 // ---------------- storage API ----------------
 app.get('/api/status', async (req, res) => {
   try {
-    const { stdout } = await runTas(['status', '--json']);
-    res.json(parseTasJson(stdout));
+    res.json(await tasStatus());
   } catch (e) {
-    res.json({ initialized: false, error: e.message });
+    res.status(502).json({ initialized: false, error: e.message });
   }
 });
 
@@ -910,24 +1142,25 @@ app.get('/api/files', async (req, res) => {
       const profs = appId
         ? db.prepare('SELECT p.* FROM profiles p JOIN app_profiles ap ON ap.profile_id=p.id WHERE ap.app_id=?').all(appId)
         : db.prepare('SELECT * FROM profiles WHERE initialized=1').all();
-      const files = [];
-      for (const prof of profs) {
+      const results = await Promise.all(profs.map(async (prof) => {
         try {
-          const { stdout } = await runTas(['list', '--json'], 900000, prof);
-          for (const f of parseTasJson(stdout)) files.push({ ...f, profileId: prof.id, profileName: prof.name });
-        } catch {}
-      }
-      return res.json({ files });
+          const list = await tasList(prof);
+          return (Array.isArray(list) ? list : []).map((f) => ({ ...f, profileId: prof.id, profileName: prof.name }));
+        } catch { return []; }
+      }));
+      return res.json({ files: results.flat() });
     }
-    const { stdout } = await runTas(['list', '--json']);
-    res.json({ files: parseTasJson(stdout) });
+    res.json({ files: await tasList() });
   } catch (e) {
-    res.json({ files: [], error: e.message });
+    res.status(502).json({ files: [], error: e.message });
   }
 });
 
-// resolve bot target dari query (dipakai operasi file di view "semua bot")
+// resolve bot target dari query (dipakai operasi file di view "semua bot").
+// token API per-bot DIPAKSA ke bot-nya sendiri — override profileId diabaikan.
 function profileFromQuery(req) {
+  const ctx = als.getStore() || {};
+  if (ctx.profile) return ctx.profile;
   const pid = parseInt(req.query.profileId, 10);
   return pid ? db.prepare('SELECT * FROM profiles WHERE id=?').get(pid) : null;
 }
@@ -960,21 +1193,24 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
 });
 
 // upload dari URL (server yang download) — STREAM ke disk, jangan buffer di RAM
-app.post('/api/upload-url', (req, res) => {
+app.post('/api/upload-url', async (req, res) => {
   const url = (req.body?.url || '').trim();
-  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'URL tidak valid' });
   const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
   if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) {
     return res.status(400).json({ error: 'Folder tidak ditemukan' });
   }
+  // tolak URL ke alamat internal / metadata (SSRF); redirect divalidasi per-hop di safeFetch
+  try { await assertPublicUrl(url); }
+  catch (e) { return res.status(400).json({ error: 'URL ditolak: ' + e.message }); }
   const job = createJob(url.slice(0, 60));
   if (folderId) job.folderId = folderId;
   const filePath = path.join(TMP_DIR, 'url-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'));
   (async () => {
     let ws = null;
     try {
-      const r = await fetch(url, { redirect: 'follow' });
+      const r = await safeFetch(url);
       if (!r.ok) throw new Error('Gagal download: HTTP ' + r.status);
+      if (!r.body) throw new Error('Respons tidak berisi body');
       ws = fs.createWriteStream(filePath);
       await new Promise((resolve, reject) => {
         Readable.fromWeb(r.body).pipe(ws)
@@ -1004,7 +1240,12 @@ app.post('/api/upload/retry/:jobId', (req, res) => {
 });
 
 app.get('/api/jobs', (req, res) => {
-  res.json({ jobs: [...jobs.values()].slice(-30) });
+  // buang job lama (> 1 jam) biar Map tidak tumbuh tanpa batas; jangan bocorkan
+  // path absolut server (tmpPath) ke client
+  const cutoff = Date.now() - 3600 * 1000;
+  for (const [id, j] of jobs) if (j.createdAt < cutoff && j.status !== 'running') jobs.delete(id);
+  const out = [...jobs.values()].slice(-30).map(({ tmpPath, ...j }) => j);
+  res.json({ jobs: out });
 });
 
 app.get('/api/download/:id', async (req, res) => {
@@ -1030,12 +1271,14 @@ app.post('/api/delete/:id', (req, res) => {
   let out = '';
   child.stdout.on('data', (d) => { out = (out + d).slice(-600); });
   child.stderr.on('data', (d) => { out = (out + d).slice(-600); });
-  child.on('error', (err) => res.status(500).json({ error: err.message }));
+  child.on('error', (err) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
   child.stdin.write('y\n');
   child.stdin.end();
   child.on('close', (code) => {
+    if (res.headersSent) return; // error sudah dikirim (cegah ERR_HTTP_HEADERS_SENT)
     if (code === 0) {
       logActivity('delete', req.params.id.slice(0, 16));
+      invalidateTasCache();
       // bersihkan mapping folder (id = hash karena frontend kirim f.hash)
       db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(req.params.id);
       // hapus juga pesan konfirmasi ✅ bot-ingest di chat (kalau ada)
@@ -1067,9 +1310,12 @@ const pullPromises = new Map();
 function ensureCached(id, cachePath, profile = null) {
   if (fs.existsSync(cachePath)) return Promise.resolve(cachePath);
   if (pullPromises.has(cachePath)) return pullPromises.get(cachePath);
-  const p = runTas(['pull', id, cachePath], 1200000, profile)
-    .then(() => cachePath)
-    .catch((e) => { try { fs.unlinkSync(cachePath); } catch {} throw e; })
+  // tulis ke .part dulu lalu rename → crash di tengah pull tidak menyisakan
+  // cache parsial yang tetap disajikan selamanya
+  const partPath = cachePath + '.part';
+  const p = runTas(['pull', id, partPath], 1200000, profile)
+    .then(() => { fs.renameSync(partPath, cachePath); return cachePath; })
+    .catch((e) => { try { fs.unlinkSync(partPath); } catch {} throw e; })
     .finally(() => pullPromises.delete(cachePath));
   pullPromises.set(cachePath, p);
   return p;
@@ -1114,16 +1360,21 @@ app.post('/api/cache/clear', (req, res) => {
 
 // ---------------- share links (expiring) ----------------
 app.post('/api/share/:id', async (req, res) => {
-  const id = req.params.id;
-  const expireH = Math.min(Math.max(parseInt(req.body?.expire) || 24, 1), 720);
-  const maxDl = Math.min(Math.max(parseInt(req.body?.maxDownloads) || 1, 1), 100);
-  const rec = await findRecord(id);
-  if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
-  const token = crypto.randomBytes(8).toString('hex');
-  db.prepare('INSERT INTO shares (token, file_hash, filename, size, expires_at, max_downloads, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(token, rec.hash, rec.filename, rec.original_size, Date.now() + expireH * 3600 * 1000, maxDl, Date.now());
-  logActivity('share', `${rec.filename} (${expireH}h, max ${maxDl}x)`);
-  res.json({ token, url: `/s/${token}`, filename: rec.filename, expiresAt: Date.now() + expireH * 3600 * 1000, maxDownloads: maxDl });
+  try {
+    const id = req.params.id;
+    const prof = profileFromQuery(req) || activeProfile; // share dari bot yang benar (bukan selalu bot aktif)
+    const expireH = Math.min(Math.max(parseInt(req.body?.expire) || 24, 1), 720);
+    const maxDl = Math.min(Math.max(parseInt(req.body?.maxDownloads) || 1, 1), 100);
+    const rec = await findRecord(id, prof);
+    if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const token = crypto.randomBytes(8).toString('hex');
+    db.prepare('INSERT INTO shares (token, file_hash, filename, size, expires_at, max_downloads, profile_id, created_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(token, rec.hash, rec.filename, rec.original_size, Date.now() + expireH * 3600 * 1000, maxDl, prof ? prof.id : null, Date.now());
+    logActivity('share', `${rec.filename} (${expireH}h, max ${maxDl}x)`);
+    res.json({ token, url: `/s/${token}`, filename: rec.filename, expiresAt: Date.now() + expireH * 3600 * 1000, maxDownloads: maxDl });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/s/:token', async (req, res) => {
@@ -1136,9 +1387,13 @@ app.get('/s/:token', async (req, res) => {
   if (s.downloads >= s.max_downloads) return res.status(410).send('Batas download tercapai');
   try {
     const ext = path.extname(s.filename) || '.bin';
-    const cachePath = path.join(CACHE_DIR, s.file_hash + ext);
-    await ensureCached(s.file_hash, cachePath);
-    db.prepare('UPDATE shares SET downloads = downloads + 1 WHERE token=?').run(s.token);
+    const prof = s.profile_id ? db.prepare('SELECT * FROM profiles WHERE id=?').get(s.profile_id) : null;
+    // cache ber-discriminator profile — dua bot dgn hash sama tidak saling tumpuk
+    const cachePath = path.join(CACHE_DIR, `${s.file_hash}-${s.profile_id || 'x'}${ext}`);
+    await ensureCached(s.file_hash, cachePath, prof);
+    // increment atomik: cegah request paralel melewati max_downloads (TOCTOU)
+    const upd = db.prepare('UPDATE shares SET downloads = downloads + 1 WHERE token=? AND downloads < max_downloads').run(s.token);
+    if (!upd.changes) return res.status(410).send('Batas download tercapai');
     res.download(cachePath, s.filename);
   } catch (e) {
     res.status(500).send('Gagal memuat file');
@@ -1158,17 +1413,19 @@ app.post('/api/share/revoke/:token', (req, res) => {
 app.post('/api/zip', async (req, res) => {
   const ids = (req.body?.ids || []).slice(0, 50);
   if (!ids.length) return res.status(400).json({ error: 'Pilih minimal 1 file' });
+  const prof = profileFromQuery(req); // ZIP dari view "semua bot" dinonaktifkan di UI
   try {
-    const { stdout } = await runTas(['list', '--json']);
-    const all = parseTasJson(stdout);
-    const picked = ids.map((id) => all.find((f) => f.hash === id || f.filename === id)).filter(Boolean);
+    const all = await tasList(prof);
+    const byHash = new Map(all.map((f) => [f.hash, f]));
+    const byName = new Map(all.map((f) => [f.filename, f]));
+    const picked = ids.map((id) => byHash.get(id) || byName.get(id)).filter(Boolean);
     if (!picked.length) return res.status(404).json({ error: 'File tidak ditemukan' });
 
     const zipDir = path.join(DL_DIR, 'zip-' + crypto.randomBytes(4).toString('hex'));
     fs.mkdirSync(zipDir, { recursive: true });
     for (const rec of picked) {
       const out = path.join(zipDir, rec.filename.replace(/[^\w.\-() ]+/g, '_'));
-      await runTas(['pull', rec.hash, out], 1800000);
+      await runTas(['pull', rec.hash, out], 1800000, prof);
     }
     logActivity('zip', `${picked.length} file`);
 
@@ -1188,12 +1445,10 @@ app.post('/api/zip', async (req, res) => {
 // ---------------- stats & activity ----------------
 app.get('/api/stats', async (req, res) => {
   try {
-    const { stdout } = await runTas(['status', '--json']);
-    const st = parseTasJson(stdout);
-    const { stdout: lsOut } = await runTas(['list', '--json']);
-    const files = parseTasJson(lsOut);
+    const st = await tasStatus();
+    const files = await tasList();
     const byType = {};
-    for (const f of files) {
+    for (const f of (Array.isArray(files) ? files : [])) {
       const ext = path.extname(f.filename || '').toLowerCase().replace('.', '');
       const cat = ['mp4', 'mkv', 'webm', 'mov', 'avi'].includes(ext) ? 'video'
         : ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'gambar'
@@ -1417,6 +1672,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS s3_creds (
   secret_key TEXT,
   created_at INTEGER
 )`);
+// migrasi one-time: secret S3 plaintext → enkripsi
+{
+  let n = 0;
+  for (const c of db.prepare('SELECT * FROM s3_creds').all()) {
+    if (c.secret_key && !String(c.secret_key).startsWith('v2:')) {
+      db.prepare('UPDATE s3_creds SET secret_key=? WHERE id=?').run(encryptSecret(c.secret_key), c.id);
+      n++;
+    }
+  }
+  if (n) console.log(`🔐 ${n} secret S3 dienkripsi (migrasi)`);
+}
 
 app.get('/api/s3', (req, res) => {
   const rows = db.prepare(`SELECT c.id, c.profile_id, c.access_key, c.created_at, p.name AS profile_name,
@@ -1433,7 +1699,7 @@ app.post('/api/s3/creds', (req, res) => {
   const accessKey = 'tas' + crypto.randomBytes(12).toString('hex').slice(0, 20);
   const secretKey = crypto.randomBytes(24).toString('base64url');
   const info = db.prepare('INSERT INTO s3_creds (profile_id, access_key, secret_key, created_at) VALUES (?,?,?,?)')
-    .run(profileId, accessKey, secretKey, Date.now());
+    .run(profileId, accessKey, encryptSecret(secretKey), Date.now());
   logActivity('s3', 'create creds utk ' + prof.name);
   res.json({
     id: info.lastInsertRowid, profileId, profileName: prof.name,
@@ -1506,7 +1772,7 @@ function presignUrl(req, cred, prof, key, expires) {
   const canonicalRequest = ['GET', path, canonicalQuery, 'host:' + host + '\n', 'host', 'UNSIGNED-PAYLOAD'].join('\n');
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
     crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
-  let k = hmac('AWS4' + cred.secret_key, dateStamp);
+  let k = hmac('AWS4' + decryptSecret(cred.secret_key), dateStamp);
   k = hmac(k, region);
   k = hmac(k, 's3');
   k = hmac(k, 'aws4_request');
@@ -1685,7 +1951,7 @@ app.use('/s3', (req, res, next) => {
   }
   const cred = accessKey ? db.prepare('SELECT * FROM s3_creds WHERE access_key=?').get(accessKey) : null;
   if (!cred) return s3Err(res, 403, 'InvalidAccessKeyId', 'Access key tidak dikenal');
-  const v = verifySigV4(req, cred.secret_key);
+  const v = verifySigV4(req, decryptSecret(cred.secret_key));
   if (!v.ok) return s3Err(res, 403, v.code || 'SignatureDoesNotMatch', v.msg || 'Signature tidak cocok');
   req.s3Cred = cred;
   req.s3Profile = db.prepare('SELECT * FROM profiles WHERE id=?').get(cred.profile_id) || null;
@@ -1718,8 +1984,8 @@ app.get('/s3/:bucket', async (req, res) => {
   const delimiter = req.query.delimiter || '';
   const listType = req.query['list-type'] === '2' ? 2 : 1;
   try {
-    const { stdout } = await runTas(['list', '--json'], 900000, prof);
-    let files = parseTasJson(stdout);
+    const list = await tasList(prof);
+    let files = Array.isArray(list) ? list : [];
     if (prefix) files = files.filter((f) => (f.filename || '').startsWith(prefix));
     files.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
     const contents = [];
@@ -1777,18 +2043,20 @@ app.head('/s3/:bucket/*', (req, res) => getObject(req, res, true));
 function deleteByName(prof, name, callback) {
   const c = spawn('tas', ['delete', name, '--hard'], { env: tasEnv(prof) });
   let out = '';
+  let done = false;
+  const finish = () => { if (done) return; done = true; invalidateTasCache(); callback && callback(null); };
   c.stdout.on('data', (d) => { out = (out + d).slice(-300); });
   c.stderr.on('data', (d) => { out = (out + d).slice(-300); });
-  c.on('error', () => callback && callback(null));
+  c.on('error', finish);
   c.stdin.write('y\n');
   c.stdin.end();
-  c.on('close', () => callback && callback(null));
+  c.on('close', finish);
 }
 
 // cari object by key (nama file) — kalau duplikat nama, ambil yang TERBARU
 async function findKey(prof, key) {
-  const { stdout } = await runTas(['list', '--json'], 900000, prof);
-  const all = parseTasJson(stdout).filter((f) => f.filename === key);
+  const list = await tasList(prof);
+  const all = (Array.isArray(list) ? list : []).filter((f) => f.filename === key);
   if (!all.length) return null;
   return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
 }
@@ -1808,10 +2076,21 @@ app.put('/s3/:bucket/*', async (req, res) => {
     await new Promise((resolve, reject) => {
       const ws = fs.createWriteStream(tmpPath);
       const hash = crypto.createHash('sha256');
-      req.on('data', (d) => hash.update(d));
+      let received = 0, aborted = false;
+      req.on('data', (d) => {
+        received += d.length;
+        // cap juga saat Transfer-Encoding: chunked (Content-Length bisa kosong/0)
+        if (received > S3_MAX_BYTES) {
+          aborted = true;
+          ws.destroy(); req.destroy();
+          reject(Object.assign(new Error('File melebihi 2GB'), { code: 'EntityTooLarge', status: 400 }));
+          return;
+        }
+        hash.update(d);
+      });
       ws.on('finish', () => resolve(hash));
-      ws.on('error', reject);
-      req.on('error', reject);
+      ws.on('error', (e) => { if (!aborted) reject(e); });
+      req.on('error', (e) => { if (!aborted) reject(e); });
       req.pipe(ws);
     }).then((hash) => {
       if (expectedHash && !/^(UNSIGNED-PAYLOAD|STREAMING-)/.test(expectedHash) && hash.digest('hex') !== expectedHash) {

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { store, PAGE_SIZE } from '../store';
-import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered } from '../composables/useApp';
+import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { promptDialog } from '../composables/usePrompt';
 import TopBar from '../components/TopBar.vue';
@@ -16,13 +16,17 @@ import ExplorerSidebar from '../components/ExplorerSidebar.vue';
 import Breadcrumb from '../components/Breadcrumb.vue';
 import DetailsPane from '../components/DetailsPane.vue';
 import ContextMenu from '../components/ContextMenu.vue';
-import { Folder } from '@lucide/vue';
+import { Folder, Menu } from '@lucide/vue';
 import FileSkeleton from '../components/ui/FileSkeleton.vue';
 import DropOverlay from '../components/DropOverlay.vue';
 import CommandPalette from '../components/CommandPalette.vue';
+import AppDialog from '../components/AppDialog.vue';
+import BotDialog from '../components/BotDialog.vue';
 
 const showPreview = ref(false);
 const showMove = ref(false);
+const showAppDlg = ref(false);
+const showBotDlg = ref(false);
 const moveHashes = ref([]);
 const sidebarCollapsed = ref(false);
 const showMobileSidebar = ref(false);
@@ -84,6 +88,12 @@ async function onNewFolder() {
  try { await createFolder(name, store.currentFolder || null); toast('Folder "' + name + '" dibuat', 'ok'); }
  catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
+async function onNewApp() {
+ const name = await promptDialog({ title: 'App baru', placeholder: 'Nama app (mis. Produk A)', okText: 'Buat' });
+ if (!name) return;
+ try { await createApp(name); toast('App "' + name + '" dibuat', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 async function doZip(ids) {
  toast('Menyiapkan ZIP ' + ids.length + ' file...', 'running');
  try {
@@ -129,9 +139,12 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
  @toggle="sidebarCollapsed = !sidebarCollapsed"
  @new-folder="onNewFolder"
  @open-folder="openFolder"
+ @new-app="onNewApp"
+ @app-settings="showAppDlg = true"
+ @new-bot="showBotDlg = true"
  />
  <div v-if="showMobileSidebar" class="fixed left-0 top-0 bottom-0 w-[280px] z-[45] lg:hidden shadow-xl overflow-hidden" :style="{ background: 'var(--bg)' }">
- <ExplorerSidebar :collapsed="false" @toggle="showMobileSidebar = false" @new-folder="onNewFolder" />
+ <ExplorerSidebar :collapsed="false" @toggle="showMobileSidebar = false" @new-folder="onNewFolder" @new-app="onNewApp" @app-settings="showAppDlg = true" @new-bot="showBotDlg = true" />
  </div>
 
  <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-[#191919] min-h-0">
@@ -140,7 +153,7 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
  <div class="flex flex-1 min-h-0">
  <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
  <div class="px-3 py-2 border-b flex items-center gap-2" :style="{ borderColor: 'var(--border)', background: 'var(--bg)' }">
- <button class="lg:hidden w-7 h-7 rounded border flex items-center justify-center" :style="{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }" @click="showMobileSidebar = true">Menu</button>
+ <button class="lg:hidden w-7 h-7 rounded border flex items-center justify-center" :style="{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }" @click="showMobileSidebar = true"><Menu :size="14" /></button>
  <Breadcrumb class="flex-1 min-w-0" />
  <button
  v-if="detailsFile"
@@ -225,6 +238,8 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
 
  <PreviewModal v-if="showPreview && store.current >= 0" @close="showPreview = false" />
  <MoveDialog v-if="showMove" :hashes="moveHashes" @close="onCloseMove" />
+ <AppDialog v-if="showAppDlg" @close="showAppDlg = false" />
+ <BotDialog v-if="showBotDlg" @close="showBotDlg = false" />
  <ContextMenu :visible="ctx.visible" :x="ctx.x" :y="ctx.y" :items="ctxItems" @action="onCtxAction" @close="ctx.visible = false" />
  </div>
 </template>

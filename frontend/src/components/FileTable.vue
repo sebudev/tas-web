@@ -1,8 +1,9 @@
 <script setup>
-import { store } from '../store';
-import { fmtBytes, fmtDate, iconFor, escapeHtml } from '../store';
+import { store, PAGE_SIZE } from '../store';
+import { fmtBytes, fmtDate, iconFor } from '../store';
 import { toggleSelectWithShift, folderById } from '../composables/useApp';
 import { showTip, hideTip } from '../composables/useTip';
+import { Check, Folder, Bot } from '@lucide/vue';
 
 defineProps({ items: { type: Array, default: () => [] } });
 const emit = defineEmits(['open', 'context']);
@@ -14,7 +15,7 @@ function onTouchEnd(e, hash) { const el = document.getElementById('row-'+hash); 
 function onRowClick(f, idx, e) {
  if (e.target.type === 'checkbox') return;
  if (store.selectMode || e.shiftKey) {
- const globalIdx = store.page * 24 + idx;
+ const globalIdx = store.page * PAGE_SIZE + idx;
  toggleSelectWithShift(f, globalIdx, e);
  } else emit('open', idx);
 }

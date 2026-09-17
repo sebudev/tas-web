@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { store } from '../store';
-import { fmtBytes, fmtDate, iconFor, isImage, escapeHtml } from '../store';
+import { fmtBytes, fmtDate, iconFor, isImage } from '../store';
 import { showTip, hideTip } from '../composables/useTip';
 import { Folder, Bot, Check } from '@lucide/vue';
 import { folderById } from '../composables/useApp';
@@ -34,9 +34,9 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  class="group relative flex flex-col rounded-[6px] border cursor-pointer overflow-hidden transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2383E2] focus-visible:ring-offset-1"
  :class="isSel ? 'shadow-sm' : 'hover:shadow-sm'"
  :style="isSel ? { borderColor: '#2383E2', background: '#2383E20D', boxShadow: '0 0 0 1px #2383E2' } : { borderColor: 'var(--border)', background: 'var(--card)' }"
- @click="emit('click')"
- @keydown.enter.prevent="emit('click')"
- @keydown.space.prevent="emit('click')"
+ @click="emit('click', $event)"
+ @keydown.enter.prevent="emit('click', $event)"
+ @keydown.space.prevent="emit('click', $event)"
  @contextmenu="onContext"
  >
  <!-- selection checkbox -->

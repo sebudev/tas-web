@@ -1,5 +1,6 @@
 <script setup>
 import { toasts, dismiss } from '../composables/useToast';
+import { X } from '@lucide/vue';
 </script>
 
 <template>
@@ -19,7 +20,7 @@ import { toasts, dismiss } from '../composables/useToast';
  >
  <span class="shrink-0 w-1.5 h-1.5 rounded-full" :style="{ background: t.cls==='err' ? '#E03E3E' : t.cls==='ok' ? '#1A7F37' : '#2383E2' }"></span>
  <span class="flex-1 leading-snug">{{ t.msg }}</span>
- <span class="text-[11px] opacity-40 shrink-0">X</span>
+ <X :size="12" class="opacity-40 shrink-0" />
  </div>
  </transition-group>
  </div>

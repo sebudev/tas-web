@@ -2,16 +2,20 @@
 import { onMounted, computed } from 'vue';
 import { store, fmtBytes, fmtDateTime } from '../store';
 import { loadDashboard } from '../composables/useApp';
-import { useAppStore } from '../stores/app';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title } from 'chart.js';
 import { Doughnut, Bar } from 'vue-chartjs';
-import { Folder, HardDrive, Share2, Trash2, Activity, LayoutDashboard, FileText, Film, Image as ImageIcon, Music, Archive } from '@lucide/vue';
+import { Folder, HardDrive, Share2, Trash2, Activity, LayoutDashboard, FileText, Film, Image as ImageIcon, Music, Archive, X } from '@lucide/vue';
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose } from 'radix-vue';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title);
 
 const emit = defineEmits(['close']);
-const piniaStore = useAppStore();
+
+// Chart.js menggambar ke <canvas> — tidak bisa membaca CSS var, jadi resolve
+// nilainya jadi warna nyata (fix: chart tampil hitam/transparan).
+function cssVar(name, fallback = '#888888') {
+ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
 
 onMounted(async () => { try { await loadDashboard(); } catch {} });
 
@@ -19,24 +23,24 @@ const doughnutData = computed(() => {
  const byType = store.stats?.byType || {};
  const labels = Object.keys(byType);
  const data = Object.values(byType);
- if (!labels.length) return { labels: ['No data'], datasets: [{ data: [1], backgroundColor: ['var(--border)'] }] };
- const colors = ['var(--text)', '#2383E2', '#E03E3E', '#7C6CFF', '#00C853', '#FF8A00', '#0094C2'];
+ if (!labels.length) return { labels: ['No data'], datasets: [{ data: [1], backgroundColor: [cssVar('--border')] }] };
+ const colors = [cssVar('--text', '#37352F'), '#2383E2', '#E03E3E', '#7C6CFF', '#00C853', '#FF8A00', '#0094C2'];
  return {
  labels,
- datasets: [{ data, backgroundColor: labels.map((_, i) => colors[i % colors.length]), borderWidth: 1, borderColor: 'var(--card)', hoverOffset: 4 }],
+ datasets: [{ data, backgroundColor: labels.map((_, i) => colors[i % colors.length]), borderWidth: 1, borderColor: cssVar('--card', '#FFFFFF'), hoverOffset: 4 }],
  };
 });
-const doughnutOptions = { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11, family: 'Inter' }, color: 'var(--text-dim)' } } }, cutout: '62%' };
+const doughnutOptions = { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11, family: 'Inter' }, color: cssVar('--text-dim') } } }, cutout: '62%' };
 
 const barData = computed(() => {
  const act = store.activity.slice(0, 7).reverse();
- if (!act.length) return { labels: ['—'], datasets: [{ label: 'Activity', data: [0], backgroundColor: 'var(--border)' }] };
+ if (!act.length) return { labels: ['—'], datasets: [{ label: 'Activity', data: [0], backgroundColor: cssVar('--border') }] };
  return {
  labels: act.map(a => new Date(a.ts).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })),
  datasets: [{ label: 'Activity', data: act.map(() => 1), backgroundColor: '#2383E2', borderRadius: 4, barThickness: 14 }],
  };
 });
-const barOptions = { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: 'var(--text-dim)', font: { size: 10 } } }, y: { display: false } } };
+const barOptions = { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: cssVar('--text-dim'), font: { size: 10 } } }, y: { display: false } } };
 </script>
 
 <template>
@@ -52,7 +56,7 @@ const barOptions = { responsive: true, plugins: { legend: { display: false } }, 
  <DialogTitle class="text-[14px] font-semibold" :style="{ color: 'var(--text)' }">Dashboard</DialogTitle>
  <DialogDescription class="text-[12px]" :style="{ color: 'var(--text-dim)' }">Ringkasan storage Telegram — Notion style</DialogDescription>
  </div>
- <DialogClose class="ml-auto w-7 h-7 rounded-[6px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg-2)] flex items-center justify-center text-[12px]" :style="{ borderColor: 'var(--border)' }">X</DialogClose>
+ <DialogClose class="ml-auto w-7 h-7 rounded-[6px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg-2)] flex items-center justify-center" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" aria-label="Tutup"><X :size="14" /></DialogClose>
  </div>
 
  <div class="flex-1 overflow-y-auto p-5 space-y-5">

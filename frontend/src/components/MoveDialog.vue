@@ -3,6 +3,10 @@ import { ref, computed } from 'vue';
 import { store } from '../store';
 import { folderChildren, folderById, moveFiles } from '../composables/useApp';
 import { toast } from '../composables/useToast';
+import { useEscape } from '../composables/useEscape';
+import { FolderInput, House, Folder } from '@lucide/vue';
+
+useEscape(() => emit('close'));
 
 const props = defineProps({
  hashes: { type: Array, default: () => [] },
@@ -43,9 +47,9 @@ async function onMove() {
  <div class="fixed inset-0 z-[150]">
  <div class="modal-backdrop" @click="emit('close')"></div>
  <div class="fixed inset-0 z-[100] flex items-center justify-center p-5 pointer-events-none">
- <div class="pointer-events-auto w-full max-w-[400px] bg-card border border-line rounded-xl2 p-5 shadow-2xl max-h-[80vh] flex flex-col">
- <h3 class="text-[15px] mb-3 flex items-center gap-2">
- <span></span> Pindahkan {{ hashes.length }} file ke...
+ <div v-focus-trap role="dialog" aria-modal="true" aria-label="Pindahkan file" class="pointer-events-auto w-full max-w-[400px] bg-card border border-line rounded-xl2 p-5 shadow-2xl max-h-[80vh] flex flex-col">
+ <h3 class="text-[15px] font-semibold mb-3 flex items-center gap-2" :style="{ color: 'var(--text)' }">
+ <FolderInput :size="16" class="shrink-0" /> Pindahkan {{ hashes.length }} file ke...
  </h3>
 
  <div class="overflow-y-auto flex-1 min-h-[120px] border border-line rounded-xl bg-bg-2 p-1.5 flex flex-col gap-[3px]">
@@ -54,7 +58,7 @@ async function onMove() {
  :class="selectedId === null ? 'bg-accent/15 text-txt font-semibold' : 'text-txt-dim hover:text-txt hover:bg-bg'"
  @click="selectedId = null"
  >
- <span></span> Semua File (root)
+ <House :size="14" class="shrink-0" /> Semua File (root)
  </button>
  <button
  v-for="f in folderList"
@@ -64,25 +68,18 @@ async function onMove() {
  :class="selectedId === f.id ? 'bg-accent/15 text-txt font-semibold' : 'text-txt-dim hover:text-txt hover:bg-bg'"
  @click="selectedId = f.id"
  >
- <span></span>
+ <Folder :size="14" class="shrink-0" />
  <span class="truncate">{{ f.name }}</span>
  <span v-if="f.fileCount" class="ml-auto shrink-0 text-[10.5px] bg-black/10 border border-line rounded-full px-1.5 py-px">{{ f.fileCount }}</span>
  </button>
  <div v-if="!folderList.length" class="text-center text-[12px] text-txt-dim py-6">
- Belum ada folder — buat dulu lewat sidebar 
+ Belum ada folder — buat dulu lewat sidebar.
  </div>
  </div>
 
  <div class="flex gap-2.5 justify-end mt-4">
- <button
- class="px-4 py-2.5 rounded-[10px] text-[13px] font-semibold border border-line text-txt bg-transparent hover:border-accent hover:text-accent transition-colors"
- @click="emit('close')"
- >Batal</button>
- <button
- class="px-4 py-2.5 rounded-[10px] text-[13px] font-semibold text-white bg-accent hover:brightness-115 transition-all disabled:opacity-50"
- :disabled="busy"
- @click="onMove"
- >{{ busy ? 'Memindahkan...' : 'Pindahkan' }}</button>
+ <button class="btn-secondary" @click="emit('close')">Batal</button>
+ <button class="btn-primary disabled:opacity-50" :disabled="busy" @click="onMove">{{ busy ? 'Memindahkan…' : 'Pindahkan' }}</button>
  </div>
  </div>
  </div>

@@ -1,17 +1,14 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, defineAsyncComponent } from 'vue';
 import { useRouter } from 'vue-router';
 import { store } from '../store';
 import { fmtBytes } from '../store';
 import { apiPost } from '../composables/useApi';
 import { KeyRound, Moon, Sun, LayoutDashboard, LogOut, Settings } from '@lucide/vue';
-import BotDialog from './BotDialog.vue';
-import AppDialog from './AppDialog.vue';
-import DashboardModal from './DashboardModal.vue';
+// lazy: chart.js + vue-chartjs cuma kebawa saat dashboard dibuka
+const DashboardModal = defineAsyncComponent(() => import('./DashboardModal.vue'));
 
 const router = useRouter();
-const showBotDlg = ref(false);
-const showAppDlg = ref(false);
 const showDash = ref(false);
 const isLight = computed(() => document.documentElement.dataset.theme === 'light');
 
@@ -40,7 +37,5 @@ async function logout() { await apiPost('/api/logout'); router.replace('/login')
  </div>
  </header>
 
- <BotDialog v-if="showBotDlg" @close="showBotDlg = false" />
- <AppDialog v-if="showAppDlg" @close="showAppDlg = false" />
  <DashboardModal v-if="showDash" @close="showDash = false" />
 </template>

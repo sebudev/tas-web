@@ -6,12 +6,17 @@ import { apiPost } from '../composables/useApi';
 import { loadFiles, createShare } from '../composables/useApp';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
+import { useEscape } from '../composables/useEscape';
+import { ChevronLeft, ChevronRight, Download, Share2, Trash2, X } from '@lucide/vue';
 import ShareDialog from './ShareDialog.vue';
+
+useEscape(() => store.current >= 0 && close());
 
 const emit = defineEmits(['close']);
 const showShare = ref(false);
 const videoRef = ref(null);
 const rootRef = ref(null);
+const mediaErr = ref(false);
 
 onMounted(() => { rootRef.value?.focus(); });
 
@@ -45,25 +50,27 @@ async function onDelete() {
  } catch (e) { toast('Gagal hapus: ' + e.message, 'err'); }
 }
 function onKey(e) {
- if (e.key === 'Escape') close();
  if (e.key === 'ArrowLeft') nav(-1);
  if (e.key === 'ArrowRight') nav(1);
 }
-watch(() => store.current, () => { if (videoRef.value) videoRef.value.load(); });
+watch(() => store.current, () => { mediaErr.value = false; if (videoRef.value) videoRef.value.load(); });
 onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
 </script>
 
 <template>
- <div v-if="file" ref="rootRef" class="fixed inset-0 z-[100] outline-none" @keydown="onKey" tabindex="-1">
+ <div v-if="file" ref="rootRef" v-focus-trap role="dialog" aria-modal="true" aria-label="Preview file" class="fixed inset-0 z-[100] outline-none" @keydown="onKey" tabindex="-1">
  <div class="modal-backdrop" @click="close"></div>
 
  <div class="absolute inset-0 z-[100] flex items-center justify-center flex-col p-2 sm:p-5 pointer-events-none">
  <button class="nav prev pointer-events-auto" @click="nav(-1)"><ChevronLeft :size="20" /></button>
 
  <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">
- <video v-if="isVideo(file)" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" />
- <img v-else-if="isImage(file)" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" />
- <div v-else class="text-[52px] text-center p-8 bg-card rounded-xl2 border border-line">{{ iconFor(file.filename) }}</div>
+ <video v-if="isVideo(file) && !mediaErr" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
+ <img v-else-if="isImage(file) && !mediaErr" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
+ <div v-else class="text-center p-8 bg-card rounded-xl2 border border-line">
+ <div class="text-[52px]">{{ iconFor(file.filename) }}</div>
+ <div v-if="mediaErr" class="text-[13px] text-txt-dim mt-2">Gagal memuat preview — coba tombol Download.</div>
+ </div>
  </div>
 
  <button class="nav next pointer-events-auto" @click="nav(1)"><ChevronRight :size="20" /></button>
