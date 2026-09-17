@@ -276,6 +276,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS profiles (
   created_at INTEGER
 )`);
 
+// data_dir yang tersimpan bisa menunjuk path HOST (mis. /root/tas-web/data)
+// kalau server pernah jalan di luar container. Di dalam container path benar
+// adalah TAS_DATA_DIR (/data). Remap kalau path lama tidak ada tapi padanannya ada.
+function normalizeDataDir(p) {
+  const cur = p.data_dir;
+  if (cur && fs.existsSync(cur)) return cur;
+  const base = path.basename(cur || '');
+  if (!base) return cur;
+  if (base === path.basename(TAS_DATA_DIR)) return TAS_DATA_DIR;
+  const cand = path.join(TAS_DATA_DIR, 'profiles', base);
+  if (fs.existsSync(cand)) return cand;
+  return cur;
+}
+
 function seedDefaultProfile() {
   const n = db.prepare('SELECT COUNT(*) c FROM profiles').get().c;
   if (n > 0) return;
@@ -285,9 +299,15 @@ function seedDefaultProfile() {
   console.log('🌱 seed profile Default (data: ' + TAS_DATA_DIR + (hasConfig ? ', sudah init' : '') + ')');
 }
 seedDefaultProfile();
-// backfill: data dir yang sudah punya config.json → tandai initialized
+// repair + backfill data_dir: path host → path container, lalu tandai initialized
 for (const p of db.prepare('SELECT * FROM profiles').all()) {
-  if (!p.initialized && fs.existsSync(path.join(p.data_dir, 'config.json'))) {
+  const fixed = normalizeDataDir(p);
+  if (fixed !== p.data_dir) {
+    db.prepare('UPDATE profiles SET data_dir=? WHERE id=?').run(fixed, p.id);
+    console.log(`🔧 data_dir profile #${p.id} "${p.name}" diperbaiki: ${p.data_dir} → ${fixed}`);
+    p.data_dir = fixed;
+  }
+  if (!p.initialized && fixed && fs.existsSync(path.join(fixed, 'config.json'))) {
     db.prepare('UPDATE profiles SET initialized=1 WHERE id=?').run(p.id);
   }
 }
