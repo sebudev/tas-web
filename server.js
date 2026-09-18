@@ -6,7 +6,7 @@
 const express = require('express');
 const multer = require('multer');
 const { execFile, spawn } = require('child_process');
-const { Readable } = require('stream');
+const { Readable, Transform } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -28,6 +28,7 @@ const TMP_DIR = path.join(TAS_DATA_DIR, 'tmp', 'uploads');
 const DL_DIR = path.join(TAS_DATA_DIR, 'tmp', 'downloads');
 const CACHE_DIR = path.join(TAS_DATA_DIR, 'cache');
 const DB_PATH = path.join(TAS_DATA_DIR, 'tas.db');
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // cap upload web / URL / S3 (2GB)
 
 for (const d of [TMP_DIR, DL_DIR, CACHE_DIR]) fs.mkdirSync(d, { recursive: true });
 
@@ -125,6 +126,17 @@ async function safeFetch(url, maxRedirects = 5) {
 
 const app = express();
 app.disable('x-powered-by');
+// Di balik reverse proxy (Caddy) → pakai X-Forwarded-For/Proto supaya req.ip &
+// req.secure benar (rate-limit per-klien, cookie Secure, presign https).
+// TRUST_PROXY: jumlah hop (default 1), "true"/"false", atau daftar IP/subnet.
+app.set('trust proxy', (() => {
+  const tp = process.env.TRUST_PROXY;
+  if (tp === undefined || tp === '') return 1;
+  if (/^\d+$/.test(tp)) return Number(tp);
+  if (tp === 'true') return true;
+  if (tp === 'false') return false;
+  return tp;
+})());
 app.use(express.json());
 
 // perbandingan rahasia constant-time (cegah timing attack pada ===)
@@ -134,11 +146,54 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-// CORS: untuk integrasi API dari app lain
+// bersihkan pesan (output CLI bisa memuat path absolut) sebelum dikirim ke client
+function stripPaths(s) {
+  const raw = String(s == null ? '' : s);
+  return raw
+    .split(TAS_DATA_DIR).join('<data>')
+    .split(__dirname).join('<app>')
+    .replace(/\/(?:root|home|data|tmp|var|usr|opt|app|workspace)\/[^\s'"]*/g, '<path>')
+    .slice(0, 300);
+}
+// catat detail di server, kirim versi bersih ke client
+function publicErrorMessage(e) {
+  const raw = (e && e.message) ? String(e.message) : String(e || '');
+  console.error('[tas-web] error:', (e && e.stack) ? e.stack : raw);
+  return stripPaths(raw) || 'Terjadi kesalahan internal';
+}
+
+// argumen posisi ke CLI `tas` tidak boleh tampak seperti flag (--xx) / kontrol
+function tasArgSafe(v) {
+  const s = String(v == null ? '' : v);
+  return s.length > 0 && !s.startsWith('-') && !/[\x00-\x1f\x7f]/.test(s);
+}
+
+// header keamanan dasar (clickjacking, sniffing, referrer, HSTS saat HTTPS)
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Content-Security-Policy', "frame-ancestors 'none'");
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
+// CORS /api: allowlist via env API_ALLOWED_ORIGINS (default: same-origin / tanpa CORS).
+// '*' tetap didukung utk kompatibilitas (reflect Origin) — tidak disarankan.
+const API_CORS_ORIGINS = (process.env.API_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use('/api', (req, res, next) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
+  const origin = req.headers.origin || '';
+  const allow = API_CORS_ORIGINS.includes('*') ? (origin || '*')
+    : (origin && API_CORS_ORIGINS.includes(origin) ? origin : '');
+  if (allow) {
+    res.set('Access-Control-Allow-Origin', allow);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.set('Access-Control-Allow-Headers',
+      req.headers['access-control-request-headers'] || 'Content-Type, Range, Authorization');
+    res.set('Access-Control-Max-Age', '86400');
+    if (allow !== '*') res.set('Access-Control-Allow-Credentials', 'true');
+  }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -156,6 +211,14 @@ CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, ts IN
 function hashPassword(pw, salt) {
   return crypto.scryptSync(String(pw), salt, 64).toString('hex');
 }
+// versi async → tidak memblokir event loop saat login
+function hashPasswordAsync(pw, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(pw), salt, 64, (err, key) => (err ? reject(err) : resolve(key.toString('hex'))));
+  });
+}
+// salt dummy: saat user tidak ada tetap di-hash → waktu respons setara (anti-enumerasi)
+const DUMMY_SALT = 'f'.repeat(32);
 
 function seedAdmin() {
   if (!AUTH_PASSWORD) return;
@@ -872,12 +935,19 @@ function loginFailed(ip) {
   loginAttempts.set(ip, next);
   if (loginAttempts.size > 5000) for (const [k, v] of loginAttempts) if (now > v.resetAt) loginAttempts.delete(k);
 }
-app.post('/api/login', (req, res) => {
+// cookie sesi: tambahkan Secure kalau request lewat HTTPS
+function sessionCookie(req, value, maxAge) {
+  const secure = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+  return `tas_session=${value}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+app.post('/api/login', async (req, res) => {
   const ip = req.ip || req.socket?.remoteAddress || 'x';
   if (loginBlocked(ip)) return res.status(429).json({ error: 'Terlalu banyak percobaan login, coba lagi nanti' });
   const { username, password } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE username=?').get(username || '');
-  if (!user || !safeEqual(hashPassword(password || '', user.salt), user.pass_hash)) {
+  // tetap hash saat user tidak ada (salt dummy) → timing tidak membocorkan keberadaan user
+  const hash = await hashPasswordAsync(password || '', user ? user.salt : DUMMY_SALT);
+  if (!user || !safeEqual(hash, user.pass_hash)) {
     loginFailed(ip);
     return res.status(401).json({ error: 'Username atau password salah' });
   }
@@ -886,14 +956,14 @@ app.post('/api/login', (req, res) => {
   db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)')
     .run(token, user.id, Date.now() + 30 * 24 * 3600 * 1000, Date.now());
   logActivity('login', username);
-  res.set('Set-Cookie', `tas_session=${token}; HttpOnly; Path=/; Max-Age=${30 * 24 * 3600}; SameSite=Lax`);
+  res.set('Set-Cookie', sessionCookie(req, token, 30 * 24 * 3600));
   res.json({ ok: true, username: user.username });
 });
 
 app.post('/api/logout', (req, res) => {
   const t = parseCookies(req).tas_session;
   if (t) db.prepare('DELETE FROM sessions WHERE token=?').run(t);
-  res.set('Set-Cookie', 'tas_session=; HttpOnly; Path=/; Max-Age=0');
+  res.set('Set-Cookie', sessionCookie(req, '', 0));
   res.json({ ok: true });
 });
 
@@ -967,13 +1037,22 @@ function toApp(a) {
   return { id: a.id, name: a.name, description: a.description, createdAt: a.created_at };
 }
 
-// resolve app utk operasi per-app: query param > konteks token API > app pertama
+// resolve app utk operasi per-app: query param > konteks token API > app pertama.
+// token bot (scoped) DIPAKSA ke app-nya sendiri — query appId diabaikan (cegah lintas-app).
 function appIdFor(req) {
-  if (req?.query?.appId) return parseInt(req.query.appId, 10) || null;
   const ctx = als.getStore() || {};
+  if (ctx.scoped && ctx.app?.id) return ctx.app.id;
+  if (req?.query?.appId) return parseInt(req.query.appId, 10) || null;
   if (ctx.app?.id) return ctx.app.id;
   const first = db.prepare('SELECT id FROM apps ORDER BY id LIMIT 1').get();
   return first ? first.id : null;
+}
+
+// token bot hanya boleh menyentuh folder app-nya sendiri
+function folderInScope(f) {
+  const ctx = als.getStore() || {};
+  if (ctx.scoped && ctx.app?.id) return f && f.app_id === ctx.app.id;
+  return true;
 }
 
 // ---------------- folders (virtual, model Google Drive) ----------------
@@ -1024,6 +1103,7 @@ app.post('/api/folders', (req, res) => {
 app.put('/api/folders/:id', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
   if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   const name = req.body?.name !== undefined && String(req.body.name).trim()
     ? String(req.body.name).trim().slice(0, 100) : f.name;
   let parentId = f.parent_id;
@@ -1053,7 +1133,7 @@ app.put('/api/folders/:id', (req, res) => {
 // alias gaya POST (konsisten dgn endpoint lain di codebase)
 app.post('/api/folders/:id/rename', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
-  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!f || !folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   const name = (req.body?.name || '').trim().slice(0, 100);
   if (!name) return res.status(400).json({ error: 'Nama folder wajib diisi' });
   db.prepare('UPDATE folders SET name=? WHERE id=?').run(name, f.id);
@@ -1063,7 +1143,7 @@ app.post('/api/folders/:id/rename', (req, res) => {
 
 app.delete('/api/folders/:id', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
-  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!f || !folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   db.transaction(() => {
     // subfolder naik ke parent; file pindah ke parent (atau root kalau parent kosong)
     db.prepare('UPDATE folders SET parent_id=? WHERE parent_id=?').run(f.parent_id, f.id);
@@ -1080,8 +1160,9 @@ app.post('/api/files/folder', (req, res) => {
   const hashes = (req.body?.hashes || []).slice(0, 100).map(String).filter(Boolean);
   if (!hashes.length) return res.status(400).json({ error: 'Pilih minimal 1 file' });
   const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
-  if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) {
-    return res.status(400).json({ error: 'Folder tidak ditemukan' });
+  if (folderId) {
+    const folder = db.prepare('SELECT * FROM folders WHERE id=?').get(folderId);
+    if (!folder || !folderInScope(folder)) return res.status(400).json({ error: 'Folder tidak ditemukan' });
   }
   db.transaction(() => {
     for (const h of hashes) {
@@ -1149,7 +1230,7 @@ app.get('/api/status', async (req, res) => {
   try {
     res.json(await tasStatus());
   } catch (e) {
-    res.status(502).json({ initialized: false, error: e.message });
+    res.status(502).json({ initialized: false, error: publicErrorMessage(e) });
   }
 });
 
@@ -1157,8 +1238,8 @@ app.get('/api/files', async (req, res) => {
   try {
     // ?all=1 → gabungan file dari semua bot di app (tiap file dilabeli bot asal)
     if (req.query.all === '1') {
-      const ctx = als.getStore() || {};
-      const appId = parseInt(req.query.appId, 10) || ctx.app?.id || appIdFor(req);
+      // appIdFor: token bot (scoped) dipaksa ke app-nya sendiri (abaikan query)
+      const appId = appIdFor(req);
       const profs = appId
         ? db.prepare('SELECT p.* FROM profiles p JOIN app_profiles ap ON ap.profile_id=p.id WHERE ap.app_id=?').all(appId)
         : db.prepare('SELECT * FROM profiles WHERE initialized=1').all();
@@ -1172,7 +1253,7 @@ app.get('/api/files', async (req, res) => {
     }
     res.json({ files: await tasList() });
   } catch (e) {
-    res.status(502).json({ files: [], error: e.message });
+    res.status(502).json({ files: [], error: publicErrorMessage(e) });
   }
 });
 
@@ -1191,10 +1272,11 @@ const upload = multer({
     destination: TMP_DIR,
     filename: (req, file, cb) => {
       const safe = path.basename(file.originalname).replace(/[^\w.\-() ]+/g, '_');
-      cb(null, Date.now() + '-' + safe);
+      // random suffix → nama temp tidak tabrakan kalau dua upload di ms yang sama
+      cb(null, Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '-' + safe);
     },
   }),
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2GB cap
+  limits: { fileSize: MAX_UPLOAD_BYTES }, // 2GB cap
 });
 
 app.post('/api/upload', upload.array('files', 20), (req, res) => {
@@ -1231,9 +1313,22 @@ app.post('/api/upload-url', async (req, res) => {
       const r = await safeFetch(url);
       if (!r.ok) throw new Error('Gagal download: HTTP ' + r.status);
       if (!r.body) throw new Error('Respons tidak berisi body');
+      const declared = parseInt(r.headers.get('content-length') || '0', 10);
+      if (declared > MAX_UPLOAD_BYTES) throw new Error('File melebihi batas 2GB');
       ws = fs.createWriteStream(filePath);
+      // cap saat streaming (Content-Length bisa kosong/ngawur) → putus kalau lewat
+      let received = 0;
+      const cap = new Transform({
+        transform(chunk, _enc, cb) {
+          received += chunk.length;
+          if (received > MAX_UPLOAD_BYTES) {
+            return cb(Object.assign(new Error('File melebihi batas 2GB'), { code: 'EntityTooLarge' }));
+          }
+          cb(null, chunk);
+        },
+      });
       await new Promise((resolve, reject) => {
-        Readable.fromWeb(r.body).pipe(ws)
+        Readable.fromWeb(r.body).pipe(cap).pipe(ws)
           .on('finish', resolve)
           .on('error', reject);
       });
@@ -1264,7 +1359,7 @@ app.get('/api/jobs', (req, res) => {
   // path absolut server (tmpPath) ke client
   const cutoff = Date.now() - 3600 * 1000;
   for (const [id, j] of jobs) if (j.createdAt < cutoff && j.status !== 'running') jobs.delete(id);
-  const out = [...jobs.values()].slice(-30).map(({ tmpPath, ...j }) => j);
+  const out = [...jobs.values()].slice(-30).map(({ tmpPath, ...j }) => ({ ...j, message: stripPaths(j.message) }));
   res.json({ jobs: out });
 });
 
@@ -1275,17 +1370,19 @@ app.get('/api/download/:id', async (req, res) => {
   try {
     const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
-    await runTas(['pull', id, outPath], 900000, prof);
+    // pull pakai rec.hash (bukan param mentah) — cegah argumen tampak-flag ke CLI
+    await runTas(['pull', rec.hash, outPath], 900000, prof);
     logActivity('download', rec.filename);
     res.download(outPath, rec.filename, () => { try { fs.unlinkSync(outPath); } catch {} });
   } catch (e) {
     try { fs.unlinkSync(outPath); } catch {}
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
 app.post('/api/delete/:id', (req, res) => {
   // --hard: hapus dari index DAN dari chat Telegram (sync penuh)
+  if (!tasArgSafe(req.params.id)) return res.status(400).json({ error: 'ID tidak valid' });
   const prof = profileFromQuery(req);
   const child = spawn('tas', ['delete', req.params.id, '--hard'], { env: tasEnv(prof) });
   let out = '';
@@ -1319,7 +1416,7 @@ app.post('/api/delete/:id', (req, res) => {
       } catch {}
       res.json({ ok: true });
     } else {
-      res.status(500).json({ error: out.slice(-300) || `exit ${code}` });
+      res.status(500).json({ error: publicErrorMessage(out || ('exit ' + code)) });
     }
   });
 });
@@ -1343,20 +1440,27 @@ function ensureCached(id, cachePath, profile = null) {
 
 app.get('/api/stream/:id', async (req, res) => {
   const id = req.params.id;
-  const prof = profileFromQuery(req);
+  const ctx = als.getStore() || {};
+  const authed = !!ctx.user;
+  // /api/stream publik = capability URL by HASH saja. Pencarian by NAMA file dan
+  // ?profileId hanya utk request terautentikasi (cegah enumerasi file lintas-bot).
+  if (!authed && !/^[a-f0-9]{64}$/i.test(id)) {
+    return res.status(404).json({ error: 'File tidak ditemukan' });
+  }
+  const prof = authed ? profileFromQuery(req) : activeProfile;
   try {
     const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
     const ext = path.extname(rec.filename || '') || '.bin';
     // cache per profile — hash bisa sama di dua bot berbeda
     const cachePath = path.join(CACHE_DIR, `${rec.hash}-${prof ? prof.id : 'x'}${ext}`);
-    await ensureCached(id, cachePath, prof);
+    await ensureCached(rec.hash, cachePath, prof);
     const disp = `inline; filename*=UTF-8''${encodeURIComponent(rec.filename)}`;
     res.sendFile(cachePath, { headers: { 'Content-Disposition': disp } }, (err) => {
-      if (err && !res.headersSent) res.status(500).json({ error: err.message });
+      if (err && !res.headersSent) res.status(500).json({ error: publicErrorMessage(err) });
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1393,7 +1497,7 @@ app.post('/api/share/:id', async (req, res) => {
     logActivity('share', `${rec.filename} (${expireH}h, max ${maxDl}x)`);
     res.json({ token, url: `/s/${token}`, filename: rec.filename, expiresAt: Date.now() + expireH * 3600 * 1000, maxDownloads: maxDl });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1414,7 +1518,10 @@ app.get('/s/:token', async (req, res) => {
     // increment atomik: cegah request paralel melewati max_downloads (TOCTOU)
     const upd = db.prepare('UPDATE shares SET downloads = downloads + 1 WHERE token=? AND downloads < max_downloads').run(s.token);
     if (!upd.changes) return res.status(410).send('Batas download tercapai');
-    res.download(cachePath, s.filename);
+    res.download(cachePath, s.filename, (err) => {
+      // gagal kirim → kembalikan kuota (jangan hangus sebelum file benar-benar terkirim)
+      if (err) db.prepare('UPDATE shares SET downloads = downloads - 1 WHERE token=? AND downloads > 0').run(s.token);
+    });
   } catch (e) {
     res.status(500).send('Gagal memuat file');
   }
@@ -1458,7 +1565,7 @@ app.post('/api/zip', async (req, res) => {
     archive.finalize();
     res.on('close', () => fs.rmSync(zipDir, { recursive: true, force: true }));
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1480,7 +1587,7 @@ app.get('/api/stats', async (req, res) => {
     const activeShares = db.prepare('SELECT COUNT(*) c FROM shares WHERE expires_at > ?').get(Date.now()).c;
     res.json({ ...st, byType, cacheBytes, activeShares });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1590,6 +1697,22 @@ function fmtReq(n) {
   return '±' + n + '/bln';
 }
 
+// throttle sederhana per sesi/token/IP (cegah penyalahgunaan kuota OpenCode Go)
+const AI_RPM = Math.max(1, parseInt(process.env.AI_RATE_LIMIT || '20', 10) || 20);
+const aiHits = new Map();
+function aiRateLimit(req, res, next) {
+  const ctx = als.getStore() || {};
+  const key = (ctx.user && ctx.user.username) || req.ip || 'x';
+  const now = Date.now();
+  const rec = aiHits.get(key);
+  const cur = (rec && now < rec.resetAt) ? rec : { count: 0, resetAt: now + 60000 };
+  cur.count++;
+  aiHits.set(key, cur);
+  if (aiHits.size > 5000) for (const [k, v] of aiHits) if (now > v.resetAt) aiHits.delete(k);
+  if (cur.count > AI_RPM) return res.status(429).json({ error: 'Terlalu banyak permintaan AI, coba lagi nanti' });
+  next();
+}
+
 app.get('/api/ai/models', (req, res) => {
   res.json({
     provider: AI_PROVIDER,
@@ -1629,18 +1752,18 @@ app.post('/api/ai/settings', (req, res) => {
   res.json({ ok: true, model: model.id });
 });
 
-app.get('/api/ai/usage', async (req, res) => {
+app.get('/api/ai/usage', aiRateLimit, async (req, res) => {
   try {
     const data = await zenGo('/usage');
     res.json({ usage: data.usage || data });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: publicErrorMessage(e) });
   }
 });
 
 // Proxy chat — body: { messages: [{role, content}], system? }
 // Pakai settings tersimpan; key Hermes tetap di server.
-app.post('/api/ai/chat', async (req, res) => {
+app.post('/api/ai/chat', aiRateLimit, async (req, res) => {
   try {
     const s = getAiSettings();
     const model = AI_MODELS.find((m) => m.id === s.model) || AI_MODELS[2];
@@ -1679,7 +1802,7 @@ app.post('/api/ai/chat', async (req, res) => {
     logActivity('ai', 'chat via ' + model.id);
     res.json({ reply, model: model.id, usage: data.usage || null });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: publicErrorMessage(e) });
   }
 });
 
@@ -1739,7 +1862,7 @@ app.delete('/api/s3/creds/:id', (req, res) => {
 // tas-web bertingkah sebagai S3 object storage (path-style, SigV4).
 // File tetap disimpan di Telegram via backend tas — 1 bot = 1 bucket.
 const S3_PREFIX = '/s3';
-const S3_MAX_BYTES = 2 * 1024 * 1024 * 1024; // sama dgn cap upload web
+const S3_MAX_BYTES = MAX_UPLOAD_BYTES; // sama dgn cap upload web
 
 function awsUriEncode(s) {
   return encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
@@ -1770,13 +1893,26 @@ function profileForBucket(bucket) {
 // ---------------- presigned URL (SigV4 query auth) ----------------
 // URL download sementara tanpa kredensial — aman dibagikan, kadaluarsa otomatis (AWS-style)
 
+// origin publik yang dipakai menandatangani & membentuk presigned URL.
+// PUBLIC_BASE_URL (mis. https://app-storage.sebudev.space) menang; kalau tidak,
+// turunkan dari X-Forwarded-Proto/Host (di balik Caddy) — jangan asal Host mentah.
+function publicOrigin(req) {
+  const env = (process.env.PUBLIC_BASE_URL || '').trim();
+  if (env) return env.replace(/\/+$/, '');
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:8001').split(',')[0].trim();
+  return `${proto}://${host}`;
+}
+
 function presignUrl(req, cred, prof, key, expires) {
   const now = new Date();
   const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
   const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z/, 'Z');
   const region = 'us-east-1';
   const scope = `${dateStamp}/${region}/s3/aws4_request`;
-  const host = req.headers.host || 'localhost:8001';
+  const origin = publicOrigin(req);
+  // host yang ditandatangani HARUS sama dengan host pada URL (canonical host header)
+  const host = (() => { try { return new URL(origin).host; } catch { return req.headers.host || 'localhost:8001'; } })();
   const bucket = bucketForProfile(prof);
   // path yang ditandatangani = path lengkap request, termasuk prefix /s3
   const path = '/s3/' + bucket + '/' + key.split('/').map(awsUriEncode).join('/');
@@ -1797,7 +1933,7 @@ function presignUrl(req, cred, prof, key, expires) {
   k = hmac(k, 's3');
   k = hmac(k, 'aws4_request');
   const signature = hmac(k, stringToSign).toString('hex');
-  return `http://${host}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return `${origin}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
 // buat presigned URL (butuh login web / API token; token hanya bisa presign bucket bot-nya sendiri)
@@ -2029,31 +2165,57 @@ app.get('/s3/:bucket', async (req, res) => {
   const prefix = req.query.prefix || '';
   const delimiter = req.query.delimiter || '';
   const listType = req.query['list-type'] === '2' ? 2 : 1;
+  const rawMax = parseInt(req.query['max-keys'], 10);
+  const maxKeys = Number.isFinite(rawMax) ? Math.min(1000, Math.max(1, rawMax)) : 1000;
+  // v2: continuation-token (base64url); v1: marker (key mentah)
+  const reqToken = listType === 2 ? String(req.query['continuation-token'] || '') : '';
+  let marker = listType === 2
+    ? (reqToken ? Buffer.from(reqToken, 'base64url').toString('utf8') : '')
+    : String(req.query.marker || '');
   try {
     const list = await tasList(prof);
     let files = Array.isArray(list) ? list : [];
     if (prefix) files = files.filter((f) => (f.filename || '').startsWith(prefix));
     files.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
-    const contents = [];
-    const prefixes = new Set();
+    // gabung Contents + CommonPrefixes lalu urut by key — S3 menghitung KEDUANYA
+    // dalam MaxKeys, jadi pagination harus atas daftar gabungan.
+    const items = [];
+    const seenPrefix = new Set();
     for (const f of files) {
       const key = f.filename || '';
       if (delimiter) {
         const rest = key.slice(prefix.length);
         const idx = rest.indexOf(delimiter);
-        if (idx >= 0) { prefixes.add(prefix + rest.slice(0, idx + delimiter.length)); continue; }
+        if (idx >= 0) {
+          const p = prefix + rest.slice(0, idx + delimiter.length);
+          if (!seenPrefix.has(p)) { seenPrefix.add(p); items.push({ key: p, prefix: true }); }
+          continue;
+        }
       }
-      contents.push(`<Contents><Key>${xmlEscape(key)}</Key><LastModified>${new Date(f.created_at || Date.now()).toISOString()}</LastModified><ETag>&quot;${xmlEscape(f.hash || '')}&quot;</ETag><Size>${f.original_size || 0}</Size><StorageClass>STANDARD</StorageClass></Contents>`);
+      items.push({ key, prefix: false, f });
     }
-    const common = [...prefixes].sort()
-      .map((p) => `<CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`).join('');
+    items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    let start = 0;
+    if (marker) {
+      const i = items.findIndex((it) => it.key > marker);
+      start = i < 0 ? items.length : i;
+    }
+    const page = items.slice(start, start + maxKeys);
+    const truncated = start + maxKeys < items.length;
+    const lastKey = page.length ? page[page.length - 1].key : marker;
+    const contents = page.filter((it) => !it.prefix).map((it) => {
+      const f = it.f;
+      return `<Contents><Key>${xmlEscape(it.key)}</Key><LastModified>${new Date(f.created_at || Date.now()).toISOString()}</LastModified><ETag>&quot;${xmlEscape(f.hash || '')}&quot;</ETag><Size>${f.original_size || 0}</Size><StorageClass>STANDARD</StorageClass></Contents>`;
+    }).join('');
+    const common = page.filter((it) => it.prefix)
+      .map((it) => `<CommonPrefixes><Prefix>${xmlEscape(it.key)}</Prefix></CommonPrefixes>`).join('');
     const name = xmlEscape(req.params.bucket);
     const body = listType === 2
-      ? `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Delimiter>${xmlEscape(delimiter)}</Delimiter><IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys>${common}${contents.join('')}</ListBucketResult>`
-      : `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Marker></Marker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents.join('')}${common}</ListBucketResult>`;
+      ? `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Delimiter>${xmlEscape(delimiter)}</Delimiter><MaxKeys>${maxKeys}</MaxKeys><KeyCount>${page.length}</KeyCount><IsTruncated>${truncated}</IsTruncated>${reqToken ? `<ContinuationToken>${xmlEscape(reqToken)}</ContinuationToken>` : ''}${truncated ? `<NextContinuationToken>${xmlEscape(Buffer.from(lastKey).toString('base64url'))}</NextContinuationToken>` : ''}${contents}${common}</ListBucketResult>`
+      : `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${name}</Name><Prefix>${xmlEscape(prefix)}</Prefix><Marker>${xmlEscape(String(req.query.marker || ''))}</Marker><MaxKeys>${maxKeys}</MaxKeys><IsTruncated>${truncated}</IsTruncated>${truncated ? `<NextMarker>${xmlEscape(lastKey)}</NextMarker>` : ''}${contents}${common}</ListBucketResult>`;
     s3Xml(res, 200, body);
   } catch (e) {
-    s3Err(res, 500, 'InternalError', e.message);
+    s3Err(res, 500, 'InternalError', publicErrorMessage(e));
   }
 });
 
@@ -2074,11 +2236,11 @@ async function getObject(req, res, headOnly) {
     if (headOnly) return res.set(meta).status(200).end();
     const ext = path.extname(rec.filename || '') || '.bin';
     const cachePath = path.join(CACHE_DIR, `${rec.hash}-${prof.id}${ext}`);
-    await ensureCached(key, cachePath, prof);
+    await ensureCached(rec.hash, cachePath, prof);
     res.set(meta);
     fs.createReadStream(cachePath).pipe(res);
   } catch (e) {
-    s3Err(res, 500, 'InternalError', e.message);
+    s3Err(res, 500, 'InternalError', publicErrorMessage(e));
   }
 }
 
@@ -2087,6 +2249,7 @@ app.head('/s3/:bucket/*', (req, res) => getObject(req, res, true));
 
 // hapus file lama dgn nama sama (overwrite semantics S3) — async, tidak blokir respon
 function deleteByName(prof, name, callback) {
+  if (!tasArgSafe(name)) { callback && callback(new Error('ID tidak valid')); return; }
   const c = spawn('tas', ['delete', name, '--hard'], { env: tasEnv(prof) });
   let out = '';
   let done = false;
@@ -2171,7 +2334,7 @@ app.put('/s3/:bucket/*', async (req, res) => {
     res.status(200).set('ETag', '"' + job.hash + '"').end();
   } catch (e) {
     try { fs.unlinkSync(tmpPath); } catch {}
-    s3Err(res, e.status || 500, e.code || 'InternalError', e.message);
+    s3Err(res, e.status || 500, e.code || 'InternalError', publicErrorMessage(e));
   }
 });
 
@@ -2186,7 +2349,7 @@ app.delete('/s3/:bucket/*', async (req, res) => {
     db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(rec.hash);
     res.status(204).end();
   } catch (e) {
-    s3Err(res, 500, 'InternalError', e.message);
+    s3Err(res, 500, 'InternalError', publicErrorMessage(e));
   }
 });
 

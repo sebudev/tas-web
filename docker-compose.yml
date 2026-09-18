@@ -25,6 +25,14 @@ services:
       - TAS_MASTER_KEY=${TAS_MASTER_KEY:-}
       # CORS gateway S3 (default '*'; set allowlist origin dipisah koma)
       - S3_ALLOWED_ORIGINS=${S3_ALLOWED_ORIGINS:-*}
+      # CORS API /api (kosong = same-origin; '*' = reflect Origin)
+      - API_ALLOWED_ORIGINS=${API_ALLOWED_ORIGINS:-}
+      # origin publik untuk presigned URL (mis. https://app-storage.sebudev.space)
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      # jumlah hop reverse proxy (Caddy = 1) → req.ip & req.secure benar
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      # batas request AI per menit per sesi/IP
+      - AI_RATE_LIMIT=${AI_RATE_LIMIT:-20}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
     networks:
       - caddy_default
