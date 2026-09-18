@@ -62,7 +62,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
  <div class="modal-backdrop" @click="close"></div>
 
  <div class="absolute inset-0 z-[100] flex items-center justify-center flex-col p-2 sm:p-5 pointer-events-none">
- <button class="nav prev pointer-events-auto" @click="nav(-1)"><ChevronLeft :size="20" /></button>
+ <button class="nav prev pointer-events-auto" aria-label="Sebelumnya" @click="nav(-1)"><ChevronLeft :size="22" /></button>
 
  <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">
  <video v-if="isVideo(file) && !mediaErr" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
@@ -73,7 +73,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
  </div>
  </div>
 
- <button class="nav next pointer-events-auto" @click="nav(1)"><ChevronRight :size="20" /></button>
+ <button class="nav next pointer-events-auto" aria-label="Berikutnya" @click="nav(1)"><ChevronRight :size="22" /></button>
 
  <div class="mt-3.5 text-center text-txt-dim text-[13px] max-w-[90vw] pointer-events-auto">
  <span class="font-semibold text-txt">{{ file.filename }}</span>
@@ -87,7 +87,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
  </div>
  </div>
 
- <button class="modal-x" @click="close"><X :size="14" /></button>
+ <button class="modal-x" aria-label="Tutup" @click="close"><X :size="18" /></button>
  <ShareDialog v-if="showShare" :file="file" @close="showShare = false" />
  </div>
 </template>
@@ -99,13 +99,16 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
 }
 .btn:hover { filter: brightness(1.15); }
 .btn-ghost {
- background: transparent; border: 1px solid var(--border); color: var(--text);
- padding: 9px 14px; border-radius: 10px; font-size: 13px; cursor: pointer;
+ background: var(--card); border: 1px solid var(--border); color: var(--text);
+ padding: 9px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 .btn-danger {
- background: rgba(231,76,60,.12); color: #e74c3c; border: 1px solid rgba(231,76,60,.4);
- padding: 9px 14px; border-radius: 10px; font-size: 13px; cursor: pointer;
+ background: rgba(224,62,62,.16); color: #E03E3E; border: 1px solid rgba(224,62,62,.5);
+ padding: 9px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
-.btn-danger:hover { filter: brightness(1.2); }
+.btn-danger:hover { background: rgba(224,62,62,.26); }
+[data-theme='light'] .btn-ghost { background: #FFFFFF; }
+[data-theme='light'] .btn-danger { background: #FFF1F1; border-color: #FFD0D0; }
+[data-theme='light'] .btn-danger:hover { background: #FFE4E4; }
 </style>
