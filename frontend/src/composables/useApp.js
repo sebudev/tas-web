@@ -168,9 +168,11 @@ export async function switchProfile(id) {
     toast('Storage bot diganti: ' + data.active.name, 'ok');
     store.activeId = id;
     store.allBots = false;
+    store.currentFolder = null; // keluar folder → tampilkan root bot yang dipilih
+    store.page = 0;
+    clearSelection();
     await loadProfiles();
-    await loadFiles();
-    await loadStatus();
+    await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
     return true;
   } catch (e) { toast('Gagal switch: ' + e.message, 'err'); return false; }
 }
@@ -240,9 +242,12 @@ export async function selectBot(id) {
   store.allBots = id === 'all';
   if (!store.allBots) store.activeId = id;
   store.page = 0;
+  // keluar dari folder yang sedang terbuka → daftar langsung ikut bot yang dipilih
+  // (sebelumnya folder tetap terbuka sehingga list tampak "tidak berubah")
+  store.currentFolder = null;
   clearSelection();
   if (!store.allBots) await syncActiveBot();
-  loadFiles();
+  await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
 }
 
 export async function createApp(name) {
