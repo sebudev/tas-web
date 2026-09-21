@@ -1808,6 +1808,17 @@ app.post('/api/ai/chat', aiRateLimit, async (req, res) => {
 
 // ---------------- S3 gateway credentials ----------------
 // Access key + secret utk klien S3 (rclone/s3cmd/aws cli). 1 bot = 1 bucket.
+db.exec(`CREATE TABLE IF NOT EXISTS key_aliases (
+  profile_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  original_size INTEGER NOT NULL DEFAULT 0,
+  stored_size INTEGER NOT NULL DEFAULT 0,
+  chunks INTEGER NOT NULL DEFAULT 1,
+  compressed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (profile_id, key)
+)`);
 db.exec(`CREATE TABLE IF NOT EXISTS s3_creds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   profile_id INTEGER UNIQUE,
@@ -2175,6 +2186,13 @@ app.get('/s3/:bucket', async (req, res) => {
   try {
     const list = await tasList(prof);
     let files = Array.isArray(list) ? list : [];
+    // Merge aliased keys, preferring a real index row when both exist.
+    const aliasRows = db.prepare('SELECT * FROM key_aliases WHERE profile_id=?').all(effProfileId(prof))
+      .map((a) => ({ filename: a.key, hash: a.hash, original_size: a.original_size, stored_size: a.stored_size, chunks: a.chunks, compressed: a.compressed, created_at: a.created_at }));
+    if (aliasRows.length) {
+      const seen = new Set(files.map((f) => f.filename));
+      for (const a of aliasRows) if (!seen.has(a.filename)) files.push(a);
+    }
     if (prefix) files = files.filter((f) => (f.filename || '').startsWith(prefix));
     files.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
     // gabung Contents + CommonPrefixes lalu urut by key — S3 menghitung KEDUANYA
@@ -2266,8 +2284,24 @@ function deleteByName(prof, name, callback) {
 async function findKey(prof, key) {
   const list = await tasList(prof);
   const all = (Array.isArray(list) ? list : []).filter((f) => f.filename === key);
-  if (!all.length) return null;
-  return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+  if (all.length) return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0];
+  // TAS dedups by content hash (files.hash is UNIQUE), so a byte-identical
+  // push under a new key produces no index row. Such keys are recorded in
+  // key_aliases so they still resolve — S3 semantics say the same bytes
+  // written to another key is another object.
+  const a = db.prepare('SELECT * FROM key_aliases WHERE profile_id=? AND key=?').get(effProfileId(prof), key);
+  if (a) {
+    return { filename: key, hash: a.hash, original_size: a.original_size, stored_size: a.stored_size, chunks: a.chunks, compressed: a.compressed, created_at: a.created_at, __alias: true };
+  }
+  return null;
+}
+
+// find an indexed file by its content hash (the dedup source of truth)
+async function findFileByHash(prof, hash) {
+  if (!hash) return null;
+  const list = await tasList(prof);
+  const all = (Array.isArray(list) ? list : []).filter((f) => f.hash === hash);
+  return all.length ? all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))[0] : null;
 }
 
 app.put('/s3/:bucket/*', async (req, res) => {
@@ -2280,6 +2314,7 @@ app.put('/s3/:bucket/*', async (req, res) => {
   const len = parseInt(req.headers['content-length'] || '0', 10);
   if (len > S3_MAX_BYTES) return s3Err(res, 400, 'EntityTooLarge', 'File melebihi 2GB');
   const expectedHash = req.headers['x-amz-content-sha256'] || '';
+  let bodyHash = '';
   const tmpPath = path.join(TMP_DIR, 's3-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'));
   try {
     await new Promise((resolve, reject) => {
@@ -2302,7 +2337,8 @@ app.put('/s3/:bucket/*', async (req, res) => {
       req.on('error', (e) => { if (!aborted) reject(e); });
       req.pipe(ws);
     }).then((hash) => {
-      if (expectedHash && !/^(UNSIGNED-PAYLOAD|STREAMING-)/.test(expectedHash) && hash.digest('hex') !== expectedHash) {
+      bodyHash = hash.digest('hex');
+      if (expectedHash && !/^(UNSIGNED-PAYLOAD|STREAMING-)/.test(expectedHash) && bodyHash !== expectedHash) {
         throw Object.assign(new Error('Payload hash tidak cocok'), { code: 'XAmzContentSHA256Mismatch', status: 400 });
       }
     });
@@ -2314,7 +2350,11 @@ app.put('/s3/:bucket/*', async (req, res) => {
     // baru push yang baru — kalau konten sama, tas bikin record baru (dedup
     // tidak aktif karena record lama sudah hilang)
     const existing = await findKey(prof, key);
-    if (existing) {
+    if (existing && existing.__alias) {
+      // The bytes belong to other keys too; drop only this key's alias.
+      db.prepare('DELETE FROM key_aliases WHERE profile_id=? AND key=?').run(effProfileId(prof), key);
+      invalidateTasCache();
+    } else if (existing) {
       await new Promise((resolve) => deleteByName(prof, existing.hash, resolve));
       db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(existing.hash);
     }
@@ -2326,12 +2366,30 @@ app.put('/s3/:bucket/*', async (req, res) => {
     if (job.status !== 'done') {
       try { fs.unlinkSync(tmpPath); } catch {}
       // dedup TAS (race/sisa) = konten sama → idempotent PUT (perilaku S3: 200 OK)
-      if (/duplicate|already uploaded/i.test(job.message || '')) {
-        return res.status(200).set('ETag', '"' + (existing?.hash || '') + '"').end();
+      if (!/duplicate|already uploaded/i.test(job.message || '')) {
+        return s3Err(res, 500, 'InternalError', job.message);
       }
-      return s3Err(res, 500, 'InternalError', job.message);
     }
-    res.status(200).set('ETag', '"' + job.hash + '"').end();
+    // A real index row for this key makes any earlier alias redundant.
+    if (job.hash) {
+      db.prepare('DELETE FROM key_aliases WHERE profile_id=? AND key=?').run(effProfileId(prof), key);
+    }
+    let resolved = await findKey(prof, key);
+    if (!resolved) {
+      const src = await findFileByHash(prof, bodyHash || job.hash);
+      if (src) {
+        db.prepare(`INSERT INTO key_aliases (profile_id, key, hash, original_size, stored_size, chunks, compressed)
+                    VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(profile_id, key) DO UPDATE SET hash=excluded.hash, original_size=excluded.original_size, stored_size=excluded.stored_size, chunks=excluded.chunks, compressed=excluded.compressed`)
+          .run(effProfileId(prof), key, src.hash, src.original_size || job.size || 0, src.stored_size || 0, src.chunks || 1, src.compressed || 0);
+        invalidateTasCache();
+        resolved = src;
+      }
+    }
+    // Never answer 200 for a key that cannot be read back: that is how rows
+    // with no object were born.
+    if (!resolved) return s3Err(res, 500, 'InternalError', 'Push selesai tetapi key tidak terindeks');
+    res.status(200).set('ETag', '"' + resolved.hash + '"').end();
   } catch (e) {
     try { fs.unlinkSync(tmpPath); } catch {}
     s3Err(res, e.status || 500, e.code || 'InternalError', publicErrorMessage(e));
@@ -2345,6 +2403,12 @@ app.delete('/s3/:bucket/*', async (req, res) => {
   try {
     const rec = await findKey(prof, key);
     if (!rec) return res.status(204).end(); // delete key yang tidak ada = 204 (S3)
+    if (rec.__alias) {
+      // Shared content: remove this key's alias, keep the bytes for other keys.
+      db.prepare('DELETE FROM key_aliases WHERE profile_id=? AND key=?').run(effProfileId(prof), key);
+      invalidateTasCache();
+      return res.status(204).end();
+    }
     await new Promise((resolve) => deleteByName(prof, rec.hash, resolve));
     db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(rec.hash);
     res.status(204).end();
