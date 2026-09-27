@@ -29,8 +29,14 @@ const DL_DIR = path.join(TAS_DATA_DIR, 'tmp', 'downloads');
 const CACHE_DIR = path.join(TAS_DATA_DIR, 'cache');
 const DB_PATH = path.join(TAS_DATA_DIR, 'tas.db');
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // cap upload web / URL / S3 (2GB)
+// upload besar dipecah di frontend (chunked) supaya tiap request < 100MB (batas
+// edge Cloudflare). Ukuran chunk bisa diatur via env UPLOAD_CHUNK_MB (maks 95).
+const CHUNK_MB = Math.min(Math.max(parseInt(process.env.UPLOAD_CHUNK_MB, 10) || 80, 8), 95);
+const CHUNK_SIZE = CHUNK_MB * 1024 * 1024;
+const CHUNK_DIR = path.join(TMP_DIR, 'chunks');
+const CHUNK_TTL_MS = 6 * 3600 * 1000; // sesi chunk mangkrak > 6 jam dibersihkan
 
-for (const d of [TMP_DIR, DL_DIR, CACHE_DIR]) fs.mkdirSync(d, { recursive: true });
+for (const d of [TMP_DIR, DL_DIR, CACHE_DIR, CHUNK_DIR]) fs.mkdirSync(d, { recursive: true });
 
 // ---------------- secret-at-rest (AES-256-GCM) ----------------
 // Kunci master: env TAS_MASTER_KEY, atau file .master.key di data dir (0600, dibuat otomatis).
@@ -1473,6 +1479,127 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
   }
   res.json({ jobs: jobsOut });
 });
+
+// ---------------- chunked upload (file besar dipecah di frontend) ----------------
+// Tiap request < 100MB → lolos batas body Cloudflare. Server menyatukan chunk
+// berurutan jadi 1 file temp, baru di-push ke Telegram (pushJob).
+function concatFiles(parts, dest) {
+  return new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(dest);
+    out.on('error', reject);
+    let i = 0;
+    const next = () => {
+      if (i >= parts.length) return out.end(() => resolve(dest));
+      const rs = fs.createReadStream(parts[i++]);
+      rs.on('error', reject);
+      rs.on('end', next);
+      rs.pipe(out, { end: false });
+    };
+    next();
+  });
+}
+
+// bersihkan sesi chunk mangkrak (dipanggil saat start & tiap upload chunk baru)
+function sweepChunks() {
+  let n = 0;
+  try {
+    for (const name of fs.readdirSync(CHUNK_DIR)) {
+      try {
+        const st = fs.statSync(path.join(CHUNK_DIR, name));
+        if (Date.now() - st.mtimeMs > CHUNK_TTL_MS) { fs.rmSync(path.join(CHUNK_DIR, name), { recursive: true, force: true }); n++; }
+      } catch {}
+    }
+  } catch {}
+  return n;
+}
+
+app.get('/api/upload/limits', (req, res) => {
+  res.json({ chunked: true, chunkSize: CHUNK_SIZE, maxFileSize: MAX_UPLOAD_BYTES });
+});
+
+const chunkUpload = multer({
+  storage: multer.diskStorage({
+    // field uploadId/index HARUS dikirim sebelum file di FormData (urutan multer)
+    destination: (req, file, cb) => {
+      const id = String(req.body?.uploadId || '');
+      if (!/^[a-f0-9]{16,64}$/.test(id)) return cb(Object.assign(new Error('uploadId tidak valid'), { status: 400 }));
+      try { const dir = path.join(CHUNK_DIR, id); fs.mkdirSync(dir, { recursive: true }); cb(null, dir); }
+      catch (e) { cb(e); }
+    },
+    filename: (req, file, cb) => {
+      const idx = parseInt(req.body?.index, 10);
+      if (!Number.isInteger(idx) || idx < 0 || idx > 9999) return cb(Object.assign(new Error('index tidak valid'), { status: 400 }));
+      cb(null, String(idx) + '.part');
+    },
+  }),
+  // beri sedikit kelonggaran: chunk tepat seukuran CHUNK_SIZE harus lolos
+  // (batas total tetap MAX_UPLOAD_BYTES saat complete)
+  limits: { fileSize: CHUNK_SIZE + 4 * 1024 * 1024, files: 1, fields: 20 },
+});
+
+app.post('/api/upload/chunk', (req, res) => {
+  chunkUpload.single('chunk')(req, res, (err) => {
+    if (err) {
+      const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400);
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Chunk melebihi batas' : (err.message || 'Chunk gagal');
+      return res.status(status).json({ error: msg });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Chunk kosong' });
+    const total = parseInt(req.body?.total, 10);
+    if (!Number.isInteger(total) || total < 1 || total > 1000) return res.status(400).json({ error: 'total tidak valid' });
+    if (Math.random() < 0.2) sweepChunks(); // pruning oportunistik
+    const dir = path.join(CHUNK_DIR, req.body.uploadId);
+    let received = 0;
+    try { received = fs.readdirSync(dir).filter((f) => /^\d+\.part$/.test(f)).length; } catch {}
+    res.json({ ok: true, received, total });
+  });
+});
+
+app.post('/api/upload/chunk/complete', async (req, res) => {
+  const id = String(req.body?.uploadId || '');
+  const total = parseInt(req.body?.total, 10);
+  const size = parseInt(req.body?.size, 10) || 0;
+  const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
+  const name = String(req.body?.name || 'upload.bin').slice(0, 200);
+  if (!/^[a-f0-9]{16,64}$/.test(id)) return res.status(400).json({ error: 'uploadId tidak valid' });
+  if (!Number.isInteger(total) || total < 1 || total > 1000) return res.status(400).json({ error: 'total tidak valid' });
+  if (folderId && !db.prepare('SELECT id FROM folders WHERE id=?').get(folderId)) return res.status(400).json({ error: 'Folder tidak ditemukan' });
+  const dir = path.join(CHUNK_DIR, id);
+  if (!fs.existsSync(dir)) return res.status(409).json({ error: 'Sesi upload tidak ditemukan' });
+  const parts = [];
+  const missing = [];
+  let sum = 0;
+  for (let i = 0; i < total; i++) {
+    const p = path.join(dir, i + '.part');
+    if (!fs.existsSync(p)) { missing.push(i); continue; }
+    sum += fs.statSync(p).size;
+    parts.push(p);
+  }
+  if (missing.length) return res.status(409).json({ error: 'Chunk belum lengkap', missing });
+  if (sum > MAX_UPLOAD_BYTES) { fs.rmSync(dir, { recursive: true, force: true }); return res.status(413).json({ error: 'File melebihi batas 2GB' }); }
+  if (size && sum !== size) return res.status(400).json({ error: 'Ukuran file tidak cocok (' + sum + ' vs ' + size + ')' });
+  try {
+    const safe = path.basename(name).replace(/[^\w.\-() ]+/g, '_');
+    const assembled = path.join(TMP_DIR, 'chunked-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex') + '-' + safe);
+    await concatFiles(parts, assembled);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const job = createJob(name);
+    pushJob(job, assembled, name, folderId);
+    res.json({ jobs: [{ jobId: job.id, name }] });
+  } catch (e) {
+    res.status(500).json({ error: publicErrorMessage(e) });
+  }
+});
+
+app.post('/api/upload/chunk/abort', (req, res) => {
+  const id = String(req.body?.uploadId || '');
+  if (/^[a-f0-9]{16,64}$/.test(id)) {
+    try { fs.rmSync(path.join(CHUNK_DIR, id), { recursive: true, force: true }); } catch {}
+  }
+  res.json({ ok: true });
+});
+
+sweepChunks();
 
 // upload dari URL (server yang download) — STREAM ke disk, jangan buffer di RAM
 app.post('/api/upload-url', async (req, res) => {

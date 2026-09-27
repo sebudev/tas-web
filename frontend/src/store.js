@@ -21,6 +21,8 @@ export const store = reactive({
   jobs: [],
   uploadQueue: [],
   uploading: false,
+  // batas upload dari server (chunked utk file besar)
+  uploadConfig: { chunked: false, chunkSize: 80 * 1024 * 1024, maxFileSize: 2 * 1024 * 1024 * 1024 },
   // bots
   profiles: [],
   activeId: null,

@@ -14,7 +14,7 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 - **🔑 API tokens per bot** — token integrasi terikat ke bot/app tertentu (halaman `/api.html`)
 - **🌗 Light mode** — toggle tema terang/gelap (tersimpan di browser)
 - **⊞/☰ Tampilan tabel & kartu** — switch view, pilihan tersimpan
-- **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL
+- **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL, **chunked upload** otomatis untuk file besar (>80MB, tembus batas 100MB Cloudflare)
 - **▶️ Preview in-browser** — video player & gambar (streaming HTTP Range, seek-able)
 - **🔗 Share link** — link kadaluarsa + batas download (publik tanpa login)
 - **🔒 Kunci file (password)** — file bisa dikunci; preview/download/stream/ZIP & share wajib password. Token unlock sementara (30 menit)
@@ -86,6 +86,7 @@ Semua endpoint butuh `Authorization: Bearer <API_TOKEN>` kecuali yang ditandai *
 | `GET /api/tokens` · `POST /api/tokens` · `DELETE /api/tokens/:id` | API token per bot (bisa di-scope per app) |
 | `GET /api/status` · `GET /api/files` | Status & daftar file (`?all=1` agregasi semua bot, `?folderId=`, `?profileId=`) |
 | `POST /api/upload` (multi) · `POST /api/upload-url` | Upload file / dari URL |
+| `GET /api/upload/limits` · `POST /api/upload/chunk` · `POST /api/upload/chunk/complete` · `POST /api/upload/chunk/abort` | Chunked upload file besar (dipecah frontend, disatukan server) |
 | `POST /api/upload/retry/:jobId` · `GET /api/jobs` | Job upload |
 | `GET /api/download/:id` · `POST /api/delete/:id` | Download / hapus hard (`?profileId=` utk multi-bot) |
 | `GET /api/stream/:id` | **publik** — stream (capability URL by hash, HTTP Range) |
@@ -161,10 +162,14 @@ gerbang akses di web UI & share link:
 ## 📤 Batas ukuran upload
 
 - **Aplikasi**: 2GB (`MAX_UPLOAD_BYTES` di `server.js`).
-- **Di belakang Cloudflare**: edge membatasi body request **100MB** (plan Free/Pro/Business;
-  Enterprise 500MB). Upload 450MB gagal **HTTP 413** sebelum sampai server walau limit app 2GB.
-- Workaround: pakai **Upload dari URL** (server yang mengunduh, body request kecil), bikin
-  subdomain **DNS-only (grey cloud)** langsung ke origin untuk upload besar, atau split <100MB.
+- **Di belakang Cloudflare**: edge membatasi **body per request 100MB** (plan Free/Pro/Business;
+  Enterprise 500MB). Karena itu file besar **dipecah otomatis di browser**: tiap potongan
+  (default 80MB, atur via `UPLOAD_CHUNK_MB`) dikirim terpisah, lalu **disatukan server** sebelum
+  dikirim ke Telegram. Jadi upload 450MB langsung dari web UI jalan tanpa ubah infra.
+- Potongan yang gagal di-retry otomatis (3x); sisa chunk mangkrak > 6 jam dibersihkan.
+- Perlu ruang disk sementara ± 2× ukuran file (chunk + file gabungan) selama proses.
+- Alternatif tanpa chunking: **Upload dari URL** (server yang mengunduh) atau subdomain
+  **DNS-only (grey cloud)** langsung ke origin.
 
 ## 🛡️ Keamanan
 

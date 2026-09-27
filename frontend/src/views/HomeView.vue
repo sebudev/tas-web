@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { store, PAGE_SIZE } from '../store';
-import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered } from '../composables/useApp';
+import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered, loadUploadLimits } from '../composables/useApp';
 import { ensureUnlocked, setFileLock, removeFileLock, downloadUrl, unlockTokenFor } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { promptDialog } from '../composables/usePrompt';
@@ -73,6 +73,7 @@ const subfolders = computed(() => (store.currentFolder ? folderChildren(store.cu
 async function init() {
  await loadProfiles();
  await loadApps();
+ await loadUploadLimits();
  await Promise.all([loadFolders(), loadFiles(), loadStatus()]);
 }
 function onGlobalKey(e) {

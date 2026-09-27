@@ -33,6 +33,8 @@ services:
       - TRUST_PROXY=${TRUST_PROXY:-1}
       # batas request AI per menit per sesi/IP
       - AI_RATE_LIMIT=${AI_RATE_LIMIT:-20}
+      # ukuran potongan upload besar di frontend (MB, maks 95 — di bawah limit 100MB Cloudflare)
+      - UPLOAD_CHUNK_MB=${UPLOAD_CHUNK_MB:-80}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
     networks:
       - caddy_default

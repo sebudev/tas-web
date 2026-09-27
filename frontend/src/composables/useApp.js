@@ -298,7 +298,22 @@ async function processQueue() {
   if (store.uploadQueue.length) processQueue();
 }
 
+// batas upload dari server (ukuran chunk) — fallback default kalau gagal
+export async function loadUploadLimits() {
+  try {
+    const d = await apiGet('/api/upload/limits');
+    if (d && d.chunkSize) store.uploadConfig = d;
+  } catch { /* pakai default */ }
+}
+
 function uploadOne(file) {
+  const chunkSize = store.uploadConfig?.chunkSize || 80 * 1024 * 1024;
+  // file besar → pecah jadi beberapa request (< batas 100MB edge Cloudflare)
+  if (store.uploadConfig?.chunked && file.size > chunkSize) return uploadChunked(file, chunkSize);
+  return uploadDirect(file);
+}
+
+function uploadDirect(file) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('files', file);
@@ -325,6 +340,78 @@ function uploadOne(file) {
     xhr.onerror = () => { dismissKey(tkey); reject(new Error('Network error')); };
     xhr.send(fd);
   });
+}
+
+function genUploadId() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// kirim 1 chunk via XHR (progress + retry). Field teks WAJIB sebelum file (urutan multer).
+function putChunk(uploadId, index, total, name, blob, tkey) {
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+    const run = () => {
+      const fd = new FormData();
+      fd.append('uploadId', uploadId);
+      fd.append('index', String(index));
+      fd.append('total', String(total));
+      fd.append('name', name);
+      fd.append('chunk', blob, 'chunk');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload/chunk');
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((((index + e.loaded / e.total) / total) * 100));
+        toast('⬆ ' + name + ' — ' + pct + '%', 'running', tkey);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) return resolve();
+        let msg = 'HTTP ' + xhr.status;
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* ignore */ }
+        const err = new Error(msg);
+        err.status = xhr.status;
+        maybeRetry(err);
+      };
+      xhr.onerror = () => maybeRetry(new Error('Network error'));
+      xhr.send(fd);
+    };
+    const maybeRetry = (err) => {
+      attempt++;
+      const retriable = !err.status || err.status >= 500 || err.status === 429;
+      if (attempt >= 3 || !retriable) return reject(err);
+      setTimeout(run, 1000 * attempt);
+    };
+    run();
+  });
+}
+
+async function uploadChunked(file, chunkSize) {
+  const uploadId = genUploadId();
+  const total = Math.ceil(file.size / chunkSize);
+  const tkey = 'up-' + file.name + '-' + file.size;
+  toast('⬆ ' + file.name + ' — dipecah ' + total + ' bagian (file besar)', 'running', tkey);
+  try {
+    for (let i = 0; i < total; i++) {
+      const start = i * chunkSize;
+      const blob = file.slice(start, Math.min(start + chunkSize, file.size));
+      await putChunk(uploadId, i, total, file.name, blob, tkey);
+    }
+    const data = await apiPost('/api/upload/chunk/complete', {
+      uploadId, total, name: file.name, size: file.size,
+      folderId: store.currentFolder || null,
+    });
+    dismissKey(tkey);
+    if (data.jobs && data.jobs.length) {
+      toast('⏳ ' + file.name + ' diproses (encrypt + upload ke Telegram)...', 'running');
+      pollJobs();
+    } else throw new Error(data.error || 'Gagal menyelesaikan upload');
+  } catch (e) {
+    dismissKey(tkey);
+    apiPost('/api/upload/chunk/abort', { uploadId }).catch(() => {}); // bersihkan sisa chunk
+    throw e;
+  }
 }
 
 // ---------- jobs ----------
