@@ -17,6 +17,7 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 - **📤 Multi-upload** — batch upload + progress, drag & drop, upload dari URL
 - **▶️ Preview in-browser** — video player & gambar (streaming HTTP Range, seek-able)
 - **🔗 Share link** — link kadaluarsa + batas download (publik tanpa login)
+- **🔒 Kunci file (password)** — file bisa dikunci; preview/download/stream/ZIP & share wajib password. Token unlock sementara (30 menit)
 - **🗜️ Download ZIP** — pilih banyak file → download jadi satu archive
 - **📊 Dashboard** — stats storage, breakdown tipe file, aktivitas, share aktif
 - **🔁 Retry upload** — job gagal bisa diulang
@@ -88,6 +89,8 @@ Semua endpoint butuh `Authorization: Bearer <API_TOKEN>` kecuali yang ditandai *
 | `POST /api/upload/retry/:jobId` · `GET /api/jobs` | Job upload |
 | `GET /api/download/:id` · `POST /api/delete/:id` | Download / hapus hard (`?profileId=` utk multi-bot) |
 | `GET /api/stream/:id` | **publik** — stream (capability URL by hash, HTTP Range) |
+| `POST /api/files/:id/lock` · `POST /api/files/:id/lock/remove` | Kunci / lepas kunci file (password, sesi web) |
+| `POST /api/files/:id/unlock` · `GET /api/files/:id/lock` | Buka kunci (dapat token sementara) / status kunci |
 | `POST /api/share/:id` · `GET /s/:token` · `POST /api/share/revoke/:token` · `GET /api/shares` | Share link |
 | `POST /api/zip` | Download ZIP multi-file |
 | `GET /api/stats` · `GET /api/activity` | Dashboard |
@@ -138,6 +141,30 @@ curl -X POST http://localhost:8001/api/s3/presign \
 Kirim header `Authorization: Bearer <API_TOKEN>` pada semua panggilan API
 (kecuali `/api/stream` & `/s/*` yang publik). Streaming video:
 `GET /api/stream/<HASH>` — mendukung HTTP Range (seek).
+
+## 🔒 Kunci file (password)
+
+Kunci akses per file — konten tetap terenkripsi AES-256-GCM seperti biasa; lapisan ini
+gerbang akses di web UI & share link:
+
+- Kunci dari UI: klik kanan file → **Kunci file**, tombol di panel Details, atau tombol
+  **Kunci** massal setelah memilih beberapa file.
+- File terkunci: preview, download, ZIP, dan `/api/stream` balas **423 Locked** sampai dibuka.
+- Buka: masukkan password → server mengembalikan **token unlock** (HMAC, berlaku 30 menit),
+  dikirim sebagai `?unlock=<token>` (tag `<video>`/`<img>` & link download) atau header
+  `X-Unlock-Token`.
+- **Share link** file terkunci menampilkan halaman password sebelum file disajikan.
+- Password di-hash **scrypt**; maks 10 percobaan/menit per IP (anti brute force).
+- Catatan: kunci berlaku di web UI + share link. Endpoint **S3 gateway / presigned URL**
+  belum ikut terkunci (di luar cakupan) — jangan bagikan kredensial S3 kalau file harus benar-benar privat.
+
+## 📤 Batas ukuran upload
+
+- **Aplikasi**: 2GB (`MAX_UPLOAD_BYTES` di `server.js`).
+- **Di belakang Cloudflare**: edge membatasi body request **100MB** (plan Free/Pro/Business;
+  Enterprise 500MB). Upload 450MB gagal **HTTP 413** sebelum sampai server walau limit app 2GB.
+- Workaround: pakai **Upload dari URL** (server yang mengunduh, body request kecil), bikin
+  subdomain **DNS-only (grey cloud)** langsung ke origin untuk upload besar, atau split <100MB.
 
 ## 🛡️ Keamanan
 

@@ -37,6 +37,8 @@ export const store = reactive({
   stats: null,
   activity: [],
   shares: [],
+  // kunci file: hash -> { token, expiresAt } (sesi browser saja, tidak persist)
+  unlocks: {},
 });
 
 // ---- helpers ----

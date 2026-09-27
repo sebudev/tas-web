@@ -4,6 +4,7 @@ import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, isVideo, isImage } from '../store';
 import { apiPost } from '../composables/useApi';
 import { loadFiles, createShare } from '../composables/useApp';
+import { streamUrl, downloadUrl, ensureUnlocked, unlockTokenFor } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
 import { useEscape } from '../composables/useEscape';
@@ -23,6 +24,19 @@ onMounted(() => { rootRef.value?.focus(); });
 const file = computed(() => store.filtered[store.current] || null);
 // di view "Semua Bot" file punya profileId > operasi harus target bot asal
 const profileQuery = computed(() => (file.value?.profileId ? `?profileId=${file.value.profileId}` : ''));
+// file terkunci yang belum dibuka → tampilkan gerbang password, jangan muat media
+const needsUnlock = computed(() => !!file.value?.locked && !unlockTokenFor(file.value));
+const streamSrc = computed(() => (file.value ? streamUrl(file.value) : ''));
+
+async function onDownload() {
+ const f = file.value;
+ if (!f) return;
+ if (needsUnlock.value) {
+  const ok = await ensureUnlocked(f);
+  if (!ok) return;
+ }
+ window.location.href = downloadUrl(f);
+}
 
 function nav(dir) {
  const n = store.filtered.length;
@@ -65,8 +79,14 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
  <button class="nav prev pointer-events-auto" aria-label="Sebelumnya" @click="nav(-1)"><ChevronLeft :size="22" /></button>
 
  <div class="pointer-events-auto flex items-center justify-center max-w-[92vw] max-h-[70vh]">
- <video v-if="isVideo(file) && !mediaErr" ref="videoRef" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
- <img v-else-if="isImage(file) && !mediaErr" :src="'/api/stream/' + encodeURIComponent(file.hash) + profileQuery" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
+ <div v-if="needsUnlock" class="text-center p-8 bg-card rounded-xl2 border border-line max-w-[420px]">
+  <div class="text-[46px]">🔒</div>
+  <div class="text-[14px] font-semibold mt-2" :style="{ color: 'var(--text)' }">File terkunci</div>
+  <div class="text-[12.5px] text-txt-dim mt-1">{{ file.hint ? 'Hint: ' + file.hint : 'Masukkan password untuk membuka file ini.' }}</div>
+  <button class="btn mt-3" @click="ensureUnlocked(file)">Buka dengan password</button>
+ </div>
+ <video v-else-if="isVideo(file) && !mediaErr" :key="streamSrc" ref="videoRef" :src="streamSrc" controls autoplay class="max-w-[92vw] max-h-[68vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
+ <img v-else-if="isImage(file) && !mediaErr" :key="streamSrc" :src="streamSrc" class="max-w-[92vw] max-h-[70vh] rounded-[10px] shadow-2xl" @error="mediaErr = true" />
  <div v-else class="text-center p-8 bg-card rounded-xl2 border border-line">
  <div class="text-[52px]">{{ iconFor(file.filename) }}</div>
  <div v-if="mediaErr" class="text-[13px] text-txt-dim mt-2">Gagal memuat preview — coba tombol Download.</div>
@@ -81,7 +101,7 @@ onBeforeUnmount(() => { if (videoRef.value) videoRef.value.pause(); });
  </div>
 
  <div class="mt-3.5 flex gap-2 flex-wrap justify-center pointer-events-auto">
- <a class="btn" :href="'/api/download/' + encodeURIComponent(file.hash) + profileQuery"><Download :size="14" /> Download</a>
+ <button class="btn" @click="onDownload"><Download :size="14" /> Download</button>
  <button class="btn-ghost" @click="showShare = true"><Share2 :size="14" /> Share</button>
  <button class="btn-danger" @click="onDelete"><Trash2 :size="14" /> Hapus</button>
  </div>

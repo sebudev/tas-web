@@ -2,11 +2,12 @@
 import { computed, ref } from 'vue';
 import { store } from '../store';
 import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles } from '../composables/useApp';
+import { setFileLock } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
 import { promptDialog } from '../composables/usePrompt';
 import SelectRadix from './ui/SelectRadix.vue';
-import { Upload, Link2, FolderPlus, RefreshCw, CheckSquare, Archive, FolderInput, Trash2, LayoutGrid, List, Search } from '@lucide/vue';
+import { Upload, Link2, FolderPlus, RefreshCw, CheckSquare, Archive, FolderInput, Trash2, LayoutGrid, List, Search, Lock } from '@lucide/vue';
 
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
@@ -31,6 +32,25 @@ async function onDeleteMulti() {
  const ids = [...store.selected]; const okCount = await deleteFiles(ids); clearSelection(); toast('' + okCount + '/' + n + ' file dihapus', okCount === n ? 'ok' : 'err'); loadFiles();
 }
 function onZip() { if (store.allBots) return toast('ZIP belum didukung di view "Semua Bot" — pilih satu bot dulu', 'err'); if (store.selected.size) emit('zip', [...store.selected]); }
+async function onLockMulti() {
+ if (store.allBots) return toast('Kunci massal belum didukung di view "Semua Bot" — pilih satu bot dulu', 'err');
+ const files = store.files.filter((f) => store.selected.has(f.hash));
+ const targets = files.filter((f) => !f.locked);
+ if (!files.length) return;
+ if (!targets.length) { toast('Semua file terpilih sudah terkunci', 'err'); return; }
+ const pw = await promptDialog({
+  title: '🔒 Kunci ' + targets.length + ' file',
+  message: 'Satu password untuk semua file terpilih. Preview/download & share-nya nanti perlu password.',
+  placeholder: 'Password (min. 4 karakter)', okText: 'Kunci', type: 'password',
+ });
+ if (pw == null) return;
+ if (pw.length < 4) { toast('Password minimal 4 karakter', 'err'); return; }
+ let ok = 0;
+ for (const f of targets) {
+  try { await setFileLock(f, { password: pw }); ok++; } catch { /* lanjut */ }
+ }
+ toast(`🔒 ${ok}/${targets.length} file dikunci`, ok === targets.length ? 'ok' : 'err');
+}
 const sortOptions = [
  { value: 'new', label: 'Terbaru' },
  { value: 'old', label: 'Terlama' },
@@ -60,6 +80,7 @@ function toggleSelectMode() { store.selectMode = !store.selectMode; if (!store.s
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border" :class="store.selectMode ? 'bg-[#2383E214] border-[#2383E240] text-[#2383E2]' : 'bg-white dark:bg-[#262626] hover:bg-[var(--bg)]'" :style="store.selectMode ? {} : { borderColor: 'var(--border)', color: 'var(--text)' }" @click="toggleSelectMode"><CheckSquare :size="14" /> Pilih</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onZip"><Archive :size="14" /> ZIP ({{ selCount }})</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="emit('move', [...store.selected])"><FolderInput :size="14" /> Pindah</button>
+ <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onLockMulti"><Lock :size="14" /> Kunci</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-[#FFF1F1] dark:bg-[#2A1F1F] text-[#E03E3E] border-[#FFD0D0] dark:border-[#5A2E2E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] disabled:opacity-40" :disabled="selCount === 0" @click="onDeleteMulti"><Trash2 :size="14" /> Hapus</button>
 
  <div class="w-full sm:w-auto sm:ml-auto flex items-center gap-1.5">

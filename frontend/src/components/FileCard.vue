@@ -3,8 +3,9 @@ import { computed, ref } from 'vue';
 import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, isImage } from '../store';
 import { showTip, hideTip } from '../composables/useTip';
-import { Folder, Bot, Check } from '@lucide/vue';
+import { Folder, Bot, Check, Lock } from '@lucide/vue';
 import { folderById } from '../composables/useApp';
+import { unlockTokenFor, streamUrl } from '../composables/useLock';
 
 const props = defineProps({
  file: { type: Object, required: true },
@@ -16,11 +17,10 @@ const name = computed(() => props.file.filename || props.file.hash);
 const folder = computed(() => (store.fileFolder[props.file.hash] ? folderById(store.fileFolder[props.file.hash]) : null));
 const isSel = computed(() => props.selected);
 const imgError = ref(false);
-const isImg = computed(() => isImage(props.file) && !imgError.value);
-const thumbUrl = computed(() => {
- const q = props.file.profileId ? `?profileId=${props.file.profileId}` : '';
- return `/api/stream/${encodeURIComponent(props.file.hash)}${q}`;
-});
+const locked = computed(() => !!props.file.locked);
+const unlocked = computed(() => !locked.value || !!unlockTokenFor(props.file));
+const isImg = computed(() => isImage(props.file) && unlocked.value && !imgError.value);
+const thumbUrl = computed(() => streamUrl(props.file));
 
 function onContext(e) { e.preventDefault(); emit('context', { file: props.file, x: e.clientX, y: e.clientY }); }
 </script>
@@ -46,9 +46,18 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  :class="!isSel ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'"
  ><Check :size="12" v-if="isSel" /></div>
 
+ <!-- lock badge -->
+ <div
+ v-if="locked"
+ class="absolute top-2 left-2 w-5 h-5 rounded-[4px] flex items-center justify-center border"
+ :style="{ background: 'var(--card)', borderColor: 'var(--border)', color: '#B7791F' }"
+ :title="file.hint ? ('Terkunci · ' + file.hint) : 'Terkunci'"
+ ><Lock :size="11" /></div>
+
  <!-- thumbnail / icon area -->
  <div class="h-[86px] flex items-center justify-center border-b overflow-hidden" :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }">
  <img v-if="isImg" :src="thumbUrl" class="w-full h-full object-cover" loading="lazy" @error="imgError = true" :alt="name" />
+ <span v-else-if="locked && !unlocked" class="text-[24px]" :style="{ color: '#B7791F' }"><Lock :size="24" /></span>
  <span v-else class="text-[28px]">{{ iconFor(file.filename || '') }}</span>
  </div>
 

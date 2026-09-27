@@ -138,6 +138,8 @@ app.set('trust proxy', (() => {
   return tp;
 })());
 app.use(express.json());
+// form share terkunci (POST password) — body kecil, urlencoded
+app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
 // perbandingan rahasia constant-time (cegah timing attack pada ===)
 function safeEqual(a, b) {
@@ -206,6 +208,18 @@ CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER, expires_at INTEGER, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS shares (token TEXT PRIMARY KEY, file_hash TEXT, filename TEXT, size INTEGER, expires_at INTEGER, max_downloads INTEGER, downloads INTEGER DEFAULT 0, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, action TEXT, detail TEXT);
+-- kunci per-file (password): akses web & share wajib "unlock" dulu.
+-- PRIMARY KEY (file_hash, profile_id): hash sama di dua bot = kunci terpisah.
+CREATE TABLE IF NOT EXISTS file_locks (
+  file_hash TEXT NOT NULL,
+  profile_id INTEGER NOT NULL,
+  pass_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  hint TEXT DEFAULT '',
+  created_at INTEGER,
+  updated_at INTEGER,
+  PRIMARY KEY (file_hash, profile_id)
+);
 `);
 
 function hashPassword(pw, salt) {
@@ -650,6 +664,81 @@ async function tasStatus(profile = null) {
 async function findRecord(id, profile = null) {
   const all = await tasList(profile);
   return (Array.isArray(all) ? all : []).find((f) => f.hash === id || f.filename === id) || null;
+}
+
+// ---------------- file locks (kunci password per file) ----------------
+// Konten file tetap terenkripsi AES-256-GCM seperti biasa; lapisan ini hanya
+// gerbang akses: preview/download/stream/ZIP & share link wajib "unlock" dulu.
+// Kunci disimpan per (file_hash, profile_id) — hash sama di bot berbeda = kunci
+// terpisah. Token unlock stateless (HMAC master key, TTL 30 menit).
+const UNLOCK_TTL_MS = 30 * 60 * 1000;
+
+function lockProfileId(profile) {
+  if (profile?.id) return profile.id;
+  const ctx = als.getStore() || {};
+  return ctx.profile?.id ?? activeProfile?.id ?? 0;
+}
+function getLock(hash, profileId) {
+  return db.prepare('SELECT * FROM file_locks WHERE file_hash=? AND profile_id=?').get(hash, profileId) || null;
+}
+function verifyLockPassword(lock, pw) {
+  if (!lock) return false;
+  return safeEqual(hashPassword(String(pw == null ? '' : pw), lock.salt), lock.pass_hash);
+}
+function makeUnlockToken(hash, profileId, version) {
+  const exp = Date.now() + UNLOCK_TTL_MS;
+  const sig = crypto.createHmac('sha256', MASTER_KEY)
+    .update(`u1|${hash}|${profileId}|${version}|${exp}`).digest('hex');
+  return { token: `${exp}.${sig}`, expiresAt: exp };
+}
+function verifyUnlockToken(token, hash, profileId, version) {
+  if (!token || typeof token !== 'string') return false;
+  const i = token.indexOf('.');
+  if (i < 1) return false;
+  const exp = Number(token.slice(0, i));
+  const sig = token.slice(i + 1);
+  if (!Number.isFinite(exp) || Date.now() > exp) return false;
+  const want = crypto.createHmac('sha256', MASTER_KEY)
+    .update(`u1|${hash}|${profileId}|${version}|${exp}`).digest('hex');
+  return safeEqual(sig, want);
+}
+// token bisa lewat header (fetch/xhr) atau query (tag <video>/<img>, link download)
+function reqUnlockToken(req) {
+  const h = req.headers['x-unlock-token'];
+  if (typeof h === 'string' && h) return h;
+  if (req.query && req.query.unlock) return String(req.query.unlock);
+  if (req.body && req.body.unlock) return String(req.body.unlock);
+  return '';
+}
+// status kunci utk satu file + apakah request ini sudah membawa token valid
+function evaluateLock(req, hash, profileId) {
+  const lock = getLock(hash, profileId);
+  if (!lock) return { locked: false, unlocked: true, hint: '' };
+  const unlocked = verifyUnlockToken(reqUnlockToken(req), hash, profileId, lock.updated_at);
+  return { locked: true, unlocked, hint: lock.hint || '', lockedAt: lock.created_at };
+}
+
+// rate-limit percobaan password (anti brute force): 10 gagal / menit per IP
+const lockAttempts = new Map();
+function lockRateOk(req) {
+  const e = lockAttempts.get(req.ip || 'x');
+  return !e || Date.now() > e.reset || e.n < 10;
+}
+function bumpLockAttempt(req) {
+  const ip = req.ip || 'x';
+  const now = Date.now();
+  let e = lockAttempts.get(ip);
+  if (!e || now > e.reset) e = { n: 0, reset: now + 60000 };
+  e.n++;
+  lockAttempts.set(ip, e);
+  if (lockAttempts.size > 500) for (const [k, v] of lockAttempts) if (now > v.reset) lockAttempts.delete(k);
+}
+function resetLockAttempt(req) { lockAttempts.delete(req.ip || 'x'); }
+
+function htmlEscape(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
 }
 
 // ---------------- jobs ----------------
@@ -1246,12 +1335,16 @@ app.get('/api/files', async (req, res) => {
       const results = await Promise.all(profs.map(async (prof) => {
         try {
           const list = await tasList(prof);
-          return (Array.isArray(list) ? list : []).map((f) => ({ ...f, profileId: prof.id, profileName: prof.name }));
+          return (Array.isArray(list) ? list : []).map((f) => ({ ...f, profileId: prof.id, profileName: prof.name, locked: !!getLock(f.hash, prof.id) }));
         } catch { return []; }
       }));
       return res.json({ files: results.flat() });
     }
-    res.json({ files: await tasList() });
+    // single-bot: bot = konteks request (token API) atau bot aktif global
+    const prof = profileFromQuery(req);
+    const pid = lockProfileId(prof);
+    const list = await tasList(prof);
+    res.json({ files: (Array.isArray(list) ? list : []).map((f) => ({ ...f, locked: !!getLock(f.hash, pid) })) });
   } catch (e) {
     res.status(502).json({ files: [], error: publicErrorMessage(e) });
   }
@@ -1265,6 +1358,93 @@ function profileFromQuery(req) {
   const pid = parseInt(req.query.profileId, 10);
   return pid ? db.prepare('SELECT * FROM profiles WHERE id=?').get(pid) : null;
 }
+
+// ---------------- API kunci file ----------------
+// Set/ubah/hapus kunci hanya dari sesi web penuh — token bot scoped TIDAK boleh
+// mengelola kunci (unlock tetap boleh, supaya integrasi bisa buka dgn password).
+app.get('/api/files/:id/lock', async (req, res) => {
+  try {
+    const prof = profileFromQuery(req);
+    const rec = await findRecord(req.params.id, prof);
+    if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const pid = lockProfileId(prof);
+    const st = evaluateLock(req, rec.hash, pid);
+    res.json({ locked: st.locked, unlocked: st.unlocked, hint: st.hint || '', lockedAt: st.lockedAt || null });
+  } catch (e) { res.status(500).json({ error: publicErrorMessage(e) }); }
+});
+
+app.post('/api/files/:id/lock', async (req, res) => {
+  const ctx = als.getStore() || {};
+  if (ctx.scoped) return res.status(403).json({ error: 'Token bot tidak bisa mengunci file' });
+  if (!lockRateOk(req)) return res.status(429).json({ error: 'Terlalu banyak percobaan — coba lagi sebentar lagi' });
+  const password = String(req.body?.password || '');
+  const hint = String(req.body?.hint || '').trim().slice(0, 120);
+  if (password.length < 4) return res.status(400).json({ error: 'Password minimal 4 karakter' });
+  try {
+    const prof = profileFromQuery(req);
+    const rec = await findRecord(req.params.id, prof);
+    if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const pid = lockProfileId(prof);
+    const existing = getLock(rec.hash, pid);
+    if (existing && !verifyLockPassword(existing, req.body?.currentPassword)) {
+      bumpLockAttempt(req);
+      return res.status(403).json({ error: 'Password lama salah' });
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    const pass_hash = hashPassword(password, salt);
+    const now = Date.now();
+    db.prepare(`INSERT INTO file_locks (file_hash, profile_id, pass_hash, salt, hint, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(file_hash, profile_id) DO UPDATE SET
+                  pass_hash=excluded.pass_hash, salt=excluded.salt, hint=excluded.hint, updated_at=excluded.updated_at`)
+      .run(rec.hash, pid, pass_hash, salt, hint, now, now);
+    resetLockAttempt(req);
+    logActivity('lock', rec.filename || rec.hash);
+    res.json({ ok: true, locked: true });
+  } catch (e) { res.status(500).json({ error: publicErrorMessage(e) }); }
+});
+
+app.post('/api/files/:id/lock/remove', async (req, res) => {
+  const ctx = als.getStore() || {};
+  if (ctx.scoped) return res.status(403).json({ error: 'Token bot tidak bisa mengubah kunci file' });
+  if (!lockRateOk(req)) return res.status(429).json({ error: 'Terlalu banyak percobaan — coba lagi sebentar lagi' });
+  try {
+    const prof = profileFromQuery(req);
+    const rec = await findRecord(req.params.id, prof);
+    if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const pid = lockProfileId(prof);
+    const existing = getLock(rec.hash, pid);
+    if (existing && !verifyLockPassword(existing, req.body?.password)) {
+      bumpLockAttempt(req);
+      return res.status(403).json({ error: 'Password salah' });
+    }
+    db.prepare('DELETE FROM file_locks WHERE file_hash=? AND profile_id=?').run(rec.hash, pid);
+    resetLockAttempt(req);
+    logActivity('unlock-remove', rec.filename || rec.hash);
+    res.json({ ok: true, locked: false });
+  } catch (e) { res.status(500).json({ error: publicErrorMessage(e) }); }
+});
+
+// buka file (dapat token sementara). Boleh dari sesi web maupun token bot scoped.
+app.post('/api/files/:id/unlock', async (req, res) => {
+  if (!lockRateOk(req)) return res.status(429).json({ error: 'Terlalu banyak percobaan — coba lagi sebentar lagi' });
+  try {
+    const prof = profileFromQuery(req);
+    const rec = await findRecord(req.params.id, prof);
+    if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const pid = lockProfileId(prof);
+    const lock = getLock(rec.hash, pid);
+    if (!lock) return res.json({ ok: true, locked: false, token: null });
+    if (!verifyLockPassword(lock, req.body?.password)) {
+      bumpLockAttempt(req);
+      return res.status(403).json({ error: 'Password salah' });
+    }
+    resetLockAttempt(req);
+    const { token, expiresAt } = makeUnlockToken(rec.hash, pid, lock.updated_at);
+    logActivity('unlock', rec.filename || rec.hash);
+    res.json({ ok: true, locked: true, token, expiresAt });
+  } catch (e) { res.status(500).json({ error: publicErrorMessage(e) }); }
+});
 
 // upload: simpan dengan nama asli (tas push pakai basename sebagai filename)
 const upload = multer({
@@ -1370,6 +1550,11 @@ app.get('/api/download/:id', async (req, res) => {
   try {
     const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const lk = evaluateLock(req, rec.hash, lockProfileId(prof));
+    if (lk.locked && !lk.unlocked) {
+      try { fs.unlinkSync(outPath); } catch {}
+      return res.status(423).json({ error: 'File terkunci — masukkan password dulu', locked: true, hint: lk.hint || '' });
+    }
     // pull pakai rec.hash (bukan param mentah) — cegah argumen tampak-flag ke CLI
     await runTas(['pull', rec.hash, outPath], 900000, prof);
     logActivity('download', rec.filename);
@@ -1451,6 +1636,10 @@ app.get('/api/stream/:id', async (req, res) => {
   try {
     const rec = await findRecord(id, prof);
     if (!rec) return res.status(404).json({ error: 'File tidak ditemukan' });
+    const lk = evaluateLock(req, rec.hash, lockProfileId(prof));
+    if (lk.locked && !lk.unlocked) {
+      return res.status(423).json({ error: 'File terkunci — masukkan password dulu', locked: true, hint: lk.hint || '' });
+    }
     const ext = path.extname(rec.filename || '') || '.bin';
     // cache per profile — hash bisa sama di dua bot berbeda
     const cachePath = path.join(CACHE_DIR, `${rec.hash}-${prof ? prof.id : 'x'}${ext}`);
@@ -1501,14 +1690,8 @@ app.post('/api/share/:id', async (req, res) => {
   }
 });
 
-app.get('/s/:token', async (req, res) => {
-  const s = db.prepare('SELECT * FROM shares WHERE token=?').get(req.params.token);
-  if (!s) return res.status(404).send('Link tidak valid');
-  if (Date.now() > s.expires_at) {
-    db.prepare('DELETE FROM shares WHERE token=?').run(s.token);
-    return res.status(410).send('Link kadaluarsa');
-  }
-  if (s.downloads >= s.max_downloads) return res.status(410).send('Batas download tercapai');
+// kirim file share (dipakai GET /s/:token setelah kunci—kalau ada—terbuka)
+async function serveShareDownload(s, res) {
   try {
     const ext = path.extname(s.filename) || '.bin';
     const prof = s.profile_id ? db.prepare('SELECT * FROM profiles WHERE id=?').get(s.profile_id) : null;
@@ -1525,6 +1708,80 @@ app.get('/s/:token', async (req, res) => {
   } catch (e) {
     res.status(500).send('Gagal memuat file');
   }
+}
+
+// halaman minta password utk share file terkunci (tanpa login)
+function renderShareUnlockPage(s, errMsg) {
+  return `<!doctype html><html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>File terkunci — ${htmlEscape(s.filename)}</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#F7F7F5;color:#191919;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px}
+@media(prefers-color-scheme:dark){body{background:#191919;color:#EDEDEC}}
+.card{width:100%;max-width:360px;background:#fff;border:1px solid #E9E9E7;border-radius:14px;padding:22px;box-shadow:0 10px 40px rgba(15,15,15,.10)}
+@media(prefers-color-scheme:dark){.card{background:#262626;border-color:#3A3A3A;box-shadow:none}}
+.icon{font-size:34px;line-height:1}
+h1{font-size:16px;margin:10px 0 4px}
+.name{font-size:12px;color:#787774;word-break:break-all}
+p{font-size:12.5px;color:#787774}
+input{width:100%;box-sizing:border-box;margin:14px 0 10px;padding:10px 12px;border-radius:9px;
+border:1px solid #E9E9E7;background:#F7F7F5;color:inherit;font-size:14px;outline:none}
+input:focus{border-color:#2383E2}
+@media(prefers-color-scheme:dark){input{background:#1F1F1F;border-color:#3A3A3A}}
+button{width:100%;padding:10px;border:none;border-radius:9px;background:#2383E2;color:#fff;font-weight:600;font-size:13.5px;cursor:pointer}
+button:hover{filter:brightness(1.1)}
+.err{margin-top:10px;font-size:12.5px;color:#E03E3E}
+.hint{font-size:12px;color:#787774;margin-top:2px}
+</style></head><body><div class="card">
+<div class="icon">🔒</div>
+<h1>File terkunci</h1>
+<div class="name">${htmlEscape(s.filename)}</div>
+<p>File ini dilindungi password. Masukkan password untuk mengunduh.</p>
+<form method="POST" action="/s/${htmlEscape(s.token)}">
+<input type="password" name="password" placeholder="Password" autofocus required autocomplete="off">
+<button type="submit">Buka &amp; Download</button>
+</form>
+${errMsg ? `<div class="err">${htmlEscape(errMsg)}</div>` : ''}
+</div></body></html>`;
+}
+
+app.get('/s/:token', async (req, res) => {
+  const s = db.prepare('SELECT * FROM shares WHERE token=?').get(req.params.token);
+  if (!s) return res.status(404).send('Link tidak valid');
+  if (Date.now() > s.expires_at) {
+    db.prepare('DELETE FROM shares WHERE token=?').run(s.token);
+    return res.status(410).send('Link kadaluarsa');
+  }
+  if (s.downloads >= s.max_downloads) return res.status(410).send('Batas download tercapai');
+  // file terkunci → wajib password sebelum file disajikan
+  const pid = s.profile_id || 0;
+  const lock = pid ? getLock(s.file_hash, pid) : null;
+  if (lock && !verifyUnlockToken(req.query.u, s.file_hash, pid, lock.updated_at)) {
+    return res.status(200).type('html').send(renderShareUnlockPage(s, ''));
+  }
+  return serveShareDownload(s, res);
+});
+
+// verifikasi password share terkunci → redirect dgn token unlock di query
+app.post('/s/:token', (req, res) => {
+  const s = db.prepare('SELECT * FROM shares WHERE token=?').get(req.params.token);
+  if (!s) return res.status(404).send('Link tidak valid');
+  if (Date.now() > s.expires_at) return res.status(410).send('Link kadaluarsa');
+  const pid = s.profile_id || 0;
+  const lock = pid ? getLock(s.file_hash, pid) : null;
+  if (!lock) return res.redirect(303, `/s/${s.token}`);
+  if (!lockRateOk(req)) {
+    return res.status(429).type('html').send(renderShareUnlockPage(s, 'Terlalu banyak percobaan — coba lagi sebentar lagi.'));
+  }
+  if (!verifyLockPassword(lock, req.body?.password)) {
+    bumpLockAttempt(req);
+    return res.status(200).type('html').send(renderShareUnlockPage(s, 'Password salah.'));
+  }
+  resetLockAttempt(req);
+  const { token } = makeUnlockToken(s.file_hash, pid, lock.updated_at);
+  res.redirect(303, `/s/${s.token}?u=${encodeURIComponent(token)}`);
 });
 
 app.get('/api/shares', (req, res) => {
@@ -1547,6 +1804,20 @@ app.post('/api/zip', async (req, res) => {
     const byName = new Map(all.map((f) => [f.filename, f]));
     const picked = ids.map((id) => byHash.get(id) || byName.get(id)).filter(Boolean);
     if (!picked.length) return res.status(404).json({ error: 'File tidak ditemukan' });
+
+    // file terkunci: butuh token unlock per file (dikirim frontend di body.unlocks)
+    const pid = lockProfileId(prof);
+    const unlocks = req.body?.unlocks || {};
+    const lockedNames = [];
+    for (const rec of picked) {
+      const lock = getLock(rec.hash, pid);
+      if (lock && !verifyUnlockToken(unlocks[rec.hash], rec.hash, pid, lock.updated_at)) {
+        lockedNames.push(rec.filename);
+      }
+    }
+    if (lockedNames.length) {
+      return res.status(423).json({ error: 'Ada file terkunci — buka kuncinya dulu', locked: true, files: lockedNames });
+    }
 
     const zipDir = path.join(DL_DIR, 'zip-' + crypto.randomBytes(4).toString('hex'));
     fs.mkdirSync(zipDir, { recursive: true });

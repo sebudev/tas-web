@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { store, PAGE_SIZE } from '../store';
 import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered } from '../composables/useApp';
+import { ensureUnlocked, setFileLock, removeFileLock, downloadUrl, unlockTokenFor } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { promptDialog } from '../composables/usePrompt';
 import TopBar from '../components/TopBar.vue';
@@ -41,15 +42,30 @@ const detailsFile = computed(() => {
 const showDetails = ref(true);
 
 const ctx = ref({ visible: false, x: 0, y: 0, file: null });
-const ctxItems = computed(() => [
- { key: 'preview', icon: 'Eye', label: 'Preview' },
- { key: 'download', icon: 'Download', label: 'Download' },
- { key: 'copy', icon: 'Copy', label: 'Copy hash' },
- { key: 'share', icon: 'Share2', label: 'Share link' },
- { key: 'move', icon: 'FolderInput', label: 'Move to...' },
- { key: 'info', icon: 'Info', label: 'Details' },
- { key: 'delete', icon: 'Trash2', label: 'Delete', danger: true },
-]);
+const ctxItems = computed(() => {
+  const f = ctx.value.file;
+  const items = [
+    { key: 'preview', icon: 'Eye', label: 'Preview' },
+    { key: 'download', icon: 'Download', label: 'Download' },
+    { key: 'copy', icon: 'Copy', label: 'Copy hash' },
+    { key: 'share', icon: 'Share2', label: 'Share link' },
+  ];
+  if (!f) return items.concat([
+    { key: 'move', icon: 'FolderInput', label: 'Move to...' },
+    { key: 'info', icon: 'Info', label: 'Details' },
+    { key: 'delete', icon: 'Trash2', label: 'Delete', danger: true },
+  ]);
+  items.push(f.locked
+    ? { key: 'unlock', icon: 'Unlock', label: 'Buka (password)' }
+    : { key: 'lock', icon: 'Lock', label: 'Kunci file' });
+  if (f.locked) items.push({ key: 'removeLock', icon: 'Lock', label: 'Hapus kunci' });
+  items.push(
+    { key: 'move', icon: 'FolderInput', label: 'Move to...' },
+    { key: 'info', icon: 'Info', label: 'Details' },
+    { key: 'delete', icon: 'Trash2', label: 'Delete', danger: true },
+  );
+  return items;
+});
 
 const breadcrumb = computed(() => (store.currentFolder ? folderPath(store.currentFolder) : []));
 const subfolders = computed(() => (store.currentFolder ? folderChildren(store.currentFolder) : []));
@@ -72,7 +88,12 @@ onMounted(() => {
 });
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey));
 
-function openPreview(idx) {
+async function openPreview(idx) {
+ const f = store.filtered[store.page * PAGE_SIZE + idx];
+ if (f && f.locked && !unlockTokenFor(f)) {
+  const ok = await ensureUnlocked(f);
+  if (!ok) return;
+ }
  store.current = store.page * PAGE_SIZE + idx;
  showPreview.value = true;
 }
@@ -95,9 +116,19 @@ async function onNewApp() {
  catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
 async function doZip(ids) {
+ // file terkunci → minta password dulu sebelum menyiapkan ZIP
+ for (const h of ids) {
+  const f = store.files.find((x) => x.hash === h);
+  if (f && f.locked && !unlockTokenFor(f)) {
+   const ok = await ensureUnlocked(f);
+   if (!ok) { toast('ZIP dibatalkan — ada file terkunci', 'err'); return; }
+  }
+ }
  toast('Menyiapkan ZIP ' + ids.length + ' file...', 'running');
  try {
- const res = await fetch('/api/zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+ const unlocks = {};
+ for (const [h, u] of Object.entries(store.unlocks)) if (u && u.token) unlocks[h] = u.token;
+ const res = await fetch('/api/zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, unlocks }) });
  if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'Gagal ZIP'); }
  const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tas-' + Date.now() + '.zip'; a.click(); URL.revokeObjectURL(a.href); toast('ZIP siap', 'ok');
  } catch (e) { toast('Gagal: ' + e.message, 'err'); }
@@ -106,12 +137,43 @@ async function doZip(ids) {
 function onFileContext({ file, x, y }) {
  ctx.value = { visible: true, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 200), file };
 }
+async function doDownload(file) {
+ if (file.locked && !unlockTokenFor(file)) {
+  const ok = await ensureUnlocked(file);
+  if (!ok) return;
+ }
+ window.location.href = downloadUrl(file);
+}
+async function onLockFile(file) {
+ const pw = await promptDialog({
+  title: '🔒 Kunci file',
+  message: `"${file.filename}" akan dikunci. Preview, download & share link nanti perlu password.`,
+  placeholder: 'Password (min. 4 karakter)', okText: 'Kunci', type: 'password',
+ });
+ if (pw == null) return;
+ if (pw.length < 4) { toast('Password minimal 4 karakter', 'err'); return; }
+ try { await setFileLock(file, { password: pw }); toast('🔒 File dikunci', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+async function onRemoveLock(file) {
+ const pw = await promptDialog({
+  title: '🔓 Hapus kunci',
+  message: 'Masukkan password saat ini untuk melepas kunci file ini.',
+  placeholder: 'Password', okText: 'Hapus kunci', type: 'password',
+ });
+ if (pw == null) return;
+ try { await removeFileLock(file, pw); toast('🔓 Kunci dihapus', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 function onCtxAction(key) {
  const f = ctx.value.file; if (!f) return;
  if (key === 'preview') { const idx = pageItems.value.findIndex(p => p.hash === f.hash); if (idx >= 0) openPreview(idx); }
- if (key === 'download') window.location.href = '/api/download/' + encodeURIComponent(f.hash) + (f.profileId ? `?profileId=${f.profileId}` : '');
- if (key === 'share') { const idx = pageItems.value.findIndex(p => p.hash === f.hash); if (idx >= 0) { store.current = store.page * PAGE_SIZE + idx; showPreview.value = true; } }
+ if (key === 'download') doDownload(f);
+ if (key === 'share') { const idx = pageItems.value.findIndex(p => p.hash === f.hash); if (idx >= 0) openPreview(idx); }
  if (key === 'copy') { navigator.clipboard.writeText(f.hash); toast('Hash disalin', 'ok'); }
+ if (key === 'lock') onLockFile(f);
+ if (key === 'unlock') ensureUnlocked(f);
+ if (key === 'removeLock') onRemoveLock(f);
  if (key === 'move') onMove([f.hash]);
  if (key === 'info') { store.selected.clear(); store.selected.add(f.hash); showDetails.value = true; }
  if (key === 'delete') doDelete([f.hash]);
@@ -122,7 +184,7 @@ async function doDelete(hashes) {
 }
 function onDetailsDelete(file) { doDelete([file.hash]); }
 function onDetailsMove(file) { onMove([file.hash]); }
-function onDetailsDownload(file) { window.location.href = '/api/download/' + encodeURIComponent(file.hash) + (file.profileId ? `?profileId=${file.profileId}` : ''); }
+function onDetailsDownload(file) { doDownload(file); }
 function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash === file.hash); if (idx >= 0) { store.current = idx; showPreview.value = true; } }
 </script>
 

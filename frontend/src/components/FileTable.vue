@@ -3,7 +3,7 @@ import { store, PAGE_SIZE } from '../store';
 import { fmtBytes, fmtDate, iconFor } from '../store';
 import { toggleSelectWithShift, folderById } from '../composables/useApp';
 import { showTip, hideTip } from '../composables/useTip';
-import { Check, Folder, Bot } from '@lucide/vue';
+import { Check, Folder, Bot, Lock } from '@lucide/vue';
 
 defineProps({ items: { type: Array, default: () => [] } });
 const emit = defineEmits(['open', 'context']);
@@ -64,6 +64,7 @@ const folderOf = (hash) => {
  <td class="px-3 py-2 align-middle">
  <div class="flex items-center gap-2 min-w-0">
  <span class="text-[15px] shrink-0">{{ iconFor(f.filename || '') }}</span>
+ <span v-if="f.locked" class="shrink-0 text-[#B7791F]" :title="f.hint ? ('Terkunci · ' + f.hint) : 'Terkunci'"><Lock :size="12" /></span>
  <span class="truncate max-w-[380px] font-medium" :style="{ color: 'var(--text)' }" @mouseenter="(e) => showTip(e, f.filename || f.hash)" @mouseleave="hideTip">{{ f.filename || f.hash }}</span>
  </div>
  </td>

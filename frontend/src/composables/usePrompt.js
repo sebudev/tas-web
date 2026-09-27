@@ -9,12 +9,14 @@ export const promptState = reactive({
   placeholder: '',
   initial: '',
   okText: 'OK',
+  inputType: 'text',
   resolve: null,
 });
 
 /**
  * Ganti prompt() native dengan dialog custom.
  * Resolve: string nilai input kalau OK, null kalau dibatalkan.
+ * opts.type: 'text' (default) | 'password' (untuk kunci file).
  * Contoh:
  *   const name = await promptDialog({ title: 'Folder baru', placeholder: 'Nama' });
  *   if (name) { ... }
@@ -25,6 +27,7 @@ export function promptDialog(opts = {}) {
   promptState.placeholder = opts.placeholder || '';
   promptState.initial = opts.initial ?? '';
   promptState.okText = opts.okText || 'OK';
+  promptState.inputType = opts.type === 'password' ? 'password' : 'text';
   promptState.show = true;
   return new Promise((resolve) => {
     promptState.resolve = resolve;

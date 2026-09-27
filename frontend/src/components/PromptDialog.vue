@@ -1,9 +1,16 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch, nextTick } from 'vue';
 import { promptState, resolvePrompt } from '../composables/usePrompt';
 
 const val = ref(promptState.initial);
 const inputRef = ref(null);
+
+// dialog selalu ter-mount; reset isi tiap kali dibuka (cegah password/teks lama nyangkut)
+watch(() => promptState.show, (show) => {
+ if (!show) return;
+ val.value = promptState.initial;
+ nextTick(() => { inputRef.value?.focus(); inputRef.value?.select(); });
+});
 
 onMounted(() => {
  val.value = promptState.initial;
@@ -12,10 +19,12 @@ onMounted(() => {
 });
 
 function submit() {
- const v = val.value.trim();
+ const raw = val.value;
+ const v = promptState.inputType === 'password' ? raw : raw.trim();
  if (!v) return;
  resolvePrompt(v);
 }
+const canSubmit = () => (promptState.inputType === 'password' ? val.value.length > 0 : !!val.value.trim());
 </script>
 
 <template>
@@ -29,12 +38,14 @@ function submit() {
  ref="inputRef"
  v-model="val"
  class="input mb-4"
+ :type="promptState.inputType"
+ :autocomplete="promptState.inputType === 'password' ? 'new-password' : 'off'"
  :placeholder="promptState.placeholder"
  @keydown.enter="submit"
  />
  <div class="flex gap-2.5 justify-end">
  <button class="btn-secondary" @click="resolvePrompt(null)">Batal</button>
- <button class="btn-primary disabled:opacity-50" :disabled="!val.trim()" @click="submit">{{ promptState.okText }}</button>
+ <button class="btn-primary disabled:opacity-50" :disabled="!canSubmit()" @click="submit">{{ promptState.okText }}</button>
  </div>
  </div>
  </div>

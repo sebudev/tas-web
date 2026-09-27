@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue';
 import { store, fmtBytes, fmtDate } from '../store';
 import { folderById } from '../composables/useApp';
 import { apiGet } from '../composables/useApi';
-import { Download, Share2, FolderInput, Trash2, Link2, Copy, Clock, Tag, Film, Image as ImageIcon, Package, Folder, Bot, X } from '@lucide/vue';
+import { Download, Share2, FolderInput, Trash2, Link2, Copy, Clock, Tag, Film, Image as ImageIcon, Package, Folder, Bot, X, Lock, Unlock } from '@lucide/vue';
 import { toast } from '../composables/useToast';
+import { ensureUnlocked, setFileLock, removeFileLock } from '../composables/useLock';
+import { promptDialog } from '../composables/usePrompt';
 
 const props = defineProps({ file: Object });
 const emit = defineEmits(['close', 'download', 'share', 'move', 'delete']);
@@ -35,6 +37,30 @@ function copyHash() {
  navigator.clipboard.writeText(props.file.hash);
  toast('Hash disalin', 'ok');
 }
+async function onLock() {
+ const pw = await promptDialog({
+  title: '🔒 Kunci file',
+  message: `"${props.file.filename}" akan dikunci. Preview, download & share link nanti perlu password.`,
+  placeholder: 'Password (min. 4 karakter)', okText: 'Kunci', type: 'password',
+ });
+ if (pw == null) return;
+ if (pw.length < 4) { toast('Password minimal 4 karakter', 'err'); return; }
+ try { await setFileLock(props.file, { password: pw }); toast('🔒 File dikunci', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+async function onUnlock() {
+ await ensureUnlocked(props.file);
+}
+async function onRemoveLock() {
+ const pw = await promptDialog({
+  title: '🔓 Hapus kunci',
+  message: 'Masukkan password saat ini untuk melepas kunci file ini.',
+  placeholder: 'Password', okText: 'Hapus kunci', type: 'password',
+ });
+ if (pw == null) return;
+ try { await removeFileLock(props.file, pw); toast('🔓 Kunci dihapus', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 </script>
 
 <template>
@@ -58,6 +84,9 @@ function copyHash() {
  <div class="text-[11px] mt-1 font-mono break-all flex items-center gap-1" :style="{ color: 'var(--text-dim)' }">
  <span class="truncate">{{ file.hash }}</span>
  <button class="shrink-0 w-7 h-7 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626] flex items-center justify-center" @click="copyHash" title="Copy hash"><Copy :size="12" /></button>
+ </div>
+ <div v-if="file.locked" class="mt-2 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border" :style="{ borderColor: 'var(--border)', color: '#B7791F', background: 'rgba(183,121,31,.10)' }">
+  <Lock :size="11" /> Terkunci{{ file.hint ? ' · ' + file.hint : '' }}
  </div>
 
  <div class="grid grid-cols-2 gap-2 text-[12px] mt-4">
@@ -90,6 +119,11 @@ function copyHash() {
  <button class="py-2 rounded-[6px] border bg-[#FFF1F1] dark:bg-[#3A2222] text-[12px] border-[#FFD0D0] dark:border-[#5A2E2E] text-[#E03E3E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] inline-flex items-center justify-center gap-1" @click="emit('delete', file)"><Trash2 :size="12" /> Delete</button>
  </div>
  <button class="w-full py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] dark:hover:bg-[#333] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }" @click="copyLink"><Link2 :size="12" /> Salin URL download</button>
+ <button v-if="!file.locked" class="w-full py-1.5 rounded-[6px] border bg-white dark:bg-[#262626] text-[12px] hover:bg-[#F7F7F5] dark:hover:bg-[#333] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" @click="onLock"><Lock :size="12" /> Kunci file</button>
+ <template v-else>
+ <button class="w-full py-1.5 rounded-[6px] border text-[12px] inline-flex items-center justify-center gap-1" :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--text)' }" @click="onUnlock"><Unlock :size="12" /> Buka file (password)</button>
+ <button class="w-full py-1.5 rounded-[6px] border bg-[#FFF1F1] dark:bg-[#3A2222] text-[12px] border-[#FFD0D0] dark:border-[#5A2E2E] text-[#E03E3E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] inline-flex items-center justify-center gap-1" @click="onRemoveLock"><Lock :size="12" /> Hapus kunci</button>
+ </template>
  </div>
  </div>
 

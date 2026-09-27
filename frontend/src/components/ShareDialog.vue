@@ -32,6 +32,7 @@ async function create() {
  <div v-focus-trap role="dialog" aria-modal="true" aria-label="Buat share link" class="pointer-events-auto w-full max-w-[380px] bg-card border border-line rounded-xl2 p-5 relative">
  <h3 class="text-[15px] font-semibold mb-1 flex items-center gap-2 pr-8" :style="{ color: 'var(--text)' }"><Share2 :size="16" class="shrink-0" /> Share link</h3>
  <div class="text-xs text-txt-dim mb-2">File: <span class="text-txt">{{ file.filename }}</span></div>
+ <div v-if="file.locked" class="text-[12px] mb-2.5 px-2.5 py-2 rounded border" :style="{ borderColor: 'var(--border)', background: 'var(--bg)', color: '#B7791F' }">🔒 File terkunci — penerima perlu memasukkan password untuk mengunduh.</div>
 
  <div class="flex gap-2 mb-2.5">
  <div class="flex-1">
