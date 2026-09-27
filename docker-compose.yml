@@ -19,8 +19,6 @@ services:
       - BOT_INGEST=${BOT_INGEST:-1}
       # override manual token bot (opsional; default didekripsi dari config.json)
       - TAS_BOT_TOKEN=${TAS_BOT_TOKEN:-}
-      # AI model (opencode-go) — key Hermes dari server, tidak pernah ke browser
-      - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
       # kunci enkripsi secret-at-rest (kosong = auto-generate di /data/.master.key)
       - TAS_MASTER_KEY=${TAS_MASTER_KEY:-}
       # CORS gateway S3 (default '*'; set allowlist origin dipisah koma)
@@ -31,8 +29,6 @@ services:
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       # jumlah hop reverse proxy (Caddy = 1) → req.ip & req.secure benar
       - TRUST_PROXY=${TRUST_PROXY:-1}
-      # batas request AI per menit per sesi/IP
-      - AI_RATE_LIMIT=${AI_RATE_LIMIT:-20}
       # ukuran potongan upload besar di frontend (MB, maks 95 — di bawah limit 100MB Cloudflare)
       - UPLOAD_CHUNK_MB=${UPLOAD_CHUNK_MB:-80}
     # TAS_DATA_DIR=/data sudah di-set di Dockerfile
