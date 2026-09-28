@@ -27,8 +27,19 @@ export async function loadFiles() {
 
 // ---------- folders ----------
 export async function loadFolders() {
+  // folder = milik 1 bot. View "Semua Bot" tidak punya konteks folder → kosongkan.
+  if (store.allBots) {
+    store.folders = [];
+    store.fileFolder = {};
+    if (store.currentFolder) store.currentFolder = null;
+    applyFilters();
+    return;
+  }
   try {
-    const q = store.currentApp ? `?appId=${store.currentApp}` : '';
+    const params = new URLSearchParams();
+    if (store.activeId) params.set('profileId', store.activeId);
+    if (store.currentApp) params.set('appId', store.currentApp);
+    const q = params.toString() ? `?${params.toString()}` : '';
     const data = await apiGet('/api/folders' + q);
     store.folders = data.folders || [];
     store.fileFolder = data.fileFolders || {};
@@ -57,7 +68,10 @@ export const folderTree = computed(() => {
 });
 
 export function folderChildren(parentId) {
-  return folderTree.value.get(parentId || null) || [];
+  const kids = folderTree.value.get(parentId || null) || [];
+  // sembunyikan folder tersembunyi (milik sendiri / leluhurnya) kecuali mode "tampilkan"
+  if (store.showHidden) return kids;
+  return kids.filter((f) => !f.hiddenEffective);
 }
 
 export function folderPath(id) {
@@ -73,6 +87,10 @@ export function folderPath(id) {
 }
 
 export function openFolder(id) {
+  if (id) {
+    const f = folderById(id);
+    if (f && f.hiddenEffective && !store.showHidden) return; // folder tersembunyi tidak bisa dibuka
+  }
   store.currentFolder = id || null;
   store.page = 0;
   clearSelection();
@@ -82,6 +100,8 @@ export function openFolder(id) {
 export function applyFilters() {
   const q = store.search.toLowerCase();
   let arr = store.files.filter((f) => !q || (f.filename || '').toLowerCase().includes(q));
+  // sembunyikan file tersembunyi (eksplisit / di dalam folder tersembunyi)
+  if (!store.showHidden) arr = arr.filter((f) => !f.hidden);
   // filter type
   if (store.filterType && store.filterType !== 'all') {
     const typeMap = {
@@ -462,7 +482,7 @@ export async function deleteFiles(ids) {
 
 // ---------- folder actions ----------
 export async function createFolder(name, parentId) {
-  const data = await apiPost('/api/folders', { name, parentId: parentId || null, appId: store.currentApp || null });
+  const data = await apiPost('/api/folders', { name, parentId: parentId || null, profileId: store.activeId || null, appId: store.currentApp || null });
   await loadFolders();
   return data;
 }
@@ -481,7 +501,21 @@ export async function deleteFolder(id) {
 }
 
 export async function moveFiles(hashes, folderId) {
-  await apiPost('/api/files/folder', { hashes, folderId: folderId || null });
+  await apiPost('/api/files/folder', { hashes, folderId: folderId || null, profileId: store.allBots ? null : (store.activeId || null) });
+  await Promise.all([loadFolders(), loadFiles()]);
+}
+
+// sembunyikan / tampilkan file (per bot). profileId opsional (view "Semua Bot").
+export async function setFilesHidden(hashes, hidden, profileId = null) {
+  if (!hashes || !hashes.length) return;
+  const pid = profileId || (store.allBots ? null : store.activeId) || null;
+  await apiPost('/api/files/hide', { hashes, hidden, profileId: pid });
+  await loadFiles();
+}
+
+// sembunyikan / tampilkan folder (per bot). Isi folder ikut tersembunyi.
+export async function setFolderHidden(id, hidden) {
+  await apiPost(`/api/folders/${id}/hide`, { hidden });
   await Promise.all([loadFolders(), loadFiles()]);
 }
 

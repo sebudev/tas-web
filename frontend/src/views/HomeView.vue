@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { store, PAGE_SIZE } from '../store';
-import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered, loadUploadLimits } from '../composables/useApp';
+import { loadFiles, loadStatus, loadProfiles, loadApps, loadFolders, pageItems, totalPages, folderPath, folderChildren, openFolder, createFolder, createApp, clearSelection, toggleSelect, moveFiles, deleteFiles, selectAllFiltered, loadUploadLimits, setFilesHidden, setFolderHidden, deleteFolder } from '../composables/useApp';
 import { ensureUnlocked, setFileLock, removeFileLock, downloadUrl, unlockTokenFor } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { promptDialog } from '../composables/usePrompt';
+import { confirmDialog } from '../composables/useConfirm';
 import TopBar from '../components/TopBar.vue';
 import Toolbar from '../components/Toolbar.vue';
 import DropZone from '../components/DropZone.vue';
@@ -41,24 +42,31 @@ const detailsFile = computed(() => {
 });
 const showDetails = ref(true);
 
-const ctx = ref({ visible: false, x: 0, y: 0, file: null });
+const ctx = ref({ visible: false, x: 0, y: 0, file: null, folder: null });
 const ctxItems = computed(() => {
+  const folder = ctx.value.folder;
+  if (folder) {
+    return [
+      { key: 'openFolder', icon: 'FolderInput', label: 'Buka folder' },
+      { key: folder.hidden ? 'unhideFolder' : 'hideFolder', icon: folder.hidden ? 'Eye' : 'EyeOff', label: folder.hidden ? 'Tampilkan folder' : 'Sembunyikan folder (+isi)' },
+      { key: 'deleteFolder', icon: 'Trash2', label: 'Hapus folder', danger: true },
+    ];
+  }
   const f = ctx.value.file;
+  if (!f) return [];
   const items = [
     { key: 'preview', icon: 'Eye', label: 'Preview' },
     { key: 'download', icon: 'Download', label: 'Download' },
     { key: 'copy', icon: 'Copy', label: 'Copy hash' },
     { key: 'share', icon: 'Share2', label: 'Share link' },
   ];
-  if (!f) return items.concat([
-    { key: 'move', icon: 'FolderInput', label: 'Move to...' },
-    { key: 'info', icon: 'Info', label: 'Details' },
-    { key: 'delete', icon: 'Trash2', label: 'Delete', danger: true },
-  ]);
   items.push(f.locked
     ? { key: 'unlock', icon: 'Unlock', label: 'Buka (password)' }
     : { key: 'lock', icon: 'Lock', label: 'Kunci file' });
   if (f.locked) items.push({ key: 'removeLock', icon: 'Lock', label: 'Hapus kunci' });
+  items.push(f.hidden
+    ? { key: 'unhide', icon: 'Eye', label: 'Tampilkan file' }
+    : { key: 'hide', icon: 'EyeOff', label: 'Sembunyikan file' });
   items.push(
     { key: 'move', icon: 'FolderInput', label: 'Move to...' },
     { key: 'info', icon: 'Info', label: 'Details' },
@@ -136,7 +144,7 @@ async function doZip(ids) {
 }
 
 function onFileContext({ file, x, y }) {
- ctx.value = { visible: true, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 200), file };
+ ctx.value = { visible: true, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 200), file, folder: null };
 }
 async function doDownload(file) {
  if (file.locked && !unlockTokenFor(file)) {
@@ -166,7 +174,38 @@ async function onRemoveLock(file) {
  try { await removeFileLock(file, pw); toast('🔓 Kunci dihapus', 'ok'); }
  catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
+async function onHideFiles(hashes, hidden, profileId = null) {
+ try {
+  await setFilesHidden(hashes, hidden, profileId);
+  toast(hidden ? '🙈 ' + hashes.length + ' file disembunyikan' : '👁 ' + hashes.length + ' file ditampilkan', 'ok');
+ } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+async function onHideFolder(folder, hidden) {
+ try {
+  await setFolderHidden(folder.id, hidden);
+  toast(hidden ? '🙈 Folder "' + folder.name + '" disembunyikan' : '👁 Folder "' + folder.name + '" ditampilkan', 'ok');
+ } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
+async function onDeleteFolder(folder) {
+ const ok = await confirmDialog({
+  title: 'Hapus folder?',
+  message: `Hapus folder "${folder.name}"?\n\nSubfolder naik ke atas dan file di dalamnya TETAP aman di storage — hanya organisasinya yang dihapus.`,
+  confirmText: 'Hapus Folder',
+ });
+ if (!ok) return;
+ try { await deleteFolder(folder.id); toast('Folder dihapus', 'ok'); }
+ catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 function onCtxAction(key) {
+ const folder = ctx.value.folder;
+ if (folder) {
+  if (key === 'openFolder') openFolder(folder.id);
+  if (key === 'hideFolder') onHideFolder(folder, true);
+  if (key === 'unhideFolder') onHideFolder(folder, false);
+  if (key === 'deleteFolder') onDeleteFolder(folder);
+  ctx.value.visible = false;
+  return;
+ }
  const f = ctx.value.file; if (!f) return;
  if (key === 'preview') { const idx = pageItems.value.findIndex(p => p.hash === f.hash); if (idx >= 0) openPreview(idx); }
  if (key === 'download') doDownload(f);
@@ -175,6 +214,8 @@ function onCtxAction(key) {
  if (key === 'lock') onLockFile(f);
  if (key === 'unlock') ensureUnlocked(f);
  if (key === 'removeLock') onRemoveLock(f);
+ if (key === 'hide') onHideFiles([f.hash], true, f.profileId);
+ if (key === 'unhide') onHideFiles([f.hash], false, f.profileId);
  if (key === 'move') onMove([f.hash]);
  if (key === 'info') { store.selected.clear(); store.selected.add(f.hash); showDetails.value = true; }
  if (key === 'delete') doDelete([f.hash]);
@@ -235,7 +276,7 @@ function onDetailsShare(file) { const idx = store.filtered.findIndex(p => p.hash
  class="group flex items-center gap-2 px-3 py-2 rounded-[6px] border bg-white dark:bg-[#262626] hover:border-[#2383E2] hover:bg-[#2383E20D] transition-colors"
  :style="{ borderColor: 'var(--border)' }"
  @click="openFolder(sf.id)"
- @contextmenu.prevent="ctx = { visible: true, x: $event.clientX, y: $event.clientY, file: null }"
+ @contextmenu.prevent="ctx = { visible: true, x: $event.clientX, y: $event.clientY, file: null, folder: sf }"
  >
  <span class="text-[16px]"><Folder :size="14" /></span>
  <span class="text-[13px] font-medium" :style="{ color: 'var(--text)' }">{{ sf.name }}</span>

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { store } from '../store';
 import { fmtBytes, fmtDate, iconFor, isImage } from '../store';
 import { showTip, hideTip } from '../composables/useTip';
-import { Folder, Bot, Check, Lock } from '@lucide/vue';
+import { Folder, Bot, Check, Lock, EyeOff } from '@lucide/vue';
 import { folderById } from '../composables/useApp';
 import { unlockTokenFor, streamUrl } from '../composables/useLock';
 
@@ -32,7 +32,7 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  :aria-selected="isSel"
  :aria-label="name"
  class="group relative flex flex-col rounded-[6px] border cursor-pointer overflow-hidden transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2383E2] focus-visible:ring-offset-1"
- :class="isSel ? 'shadow-sm' : 'hover:shadow-sm'"
+ :class="[isSel ? 'shadow-sm' : 'hover:shadow-sm', file.hidden ? 'opacity-55' : '']"
  :style="isSel ? { borderColor: '#2383E2', background: '#2383E20D', boxShadow: '0 0 0 1px #2383E2' } : { borderColor: 'var(--border)', background: 'var(--card)' }"
  @click="emit('click', $event)"
  @keydown.enter.prevent="emit('click', $event)"
@@ -46,13 +46,11 @@ function onContext(e) { e.preventDefault(); emit('context', { file: props.file, 
  :class="!isSel ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'"
  ><Check :size="12" v-if="isSel" /></div>
 
- <!-- lock badge -->
- <div
- v-if="locked"
- class="absolute top-2 left-2 w-5 h-5 rounded-[4px] flex items-center justify-center border"
- :style="{ background: 'var(--card)', borderColor: 'var(--border)', color: '#B7791F' }"
- :title="file.hint ? ('Terkunci · ' + file.hint) : 'Terkunci'"
- ><Lock :size="11" /></div>
+ <!-- badges (hidden / lock) -->
+ <div class="absolute top-2 left-2 flex items-center gap-1">
+  <div v-if="file.hidden" class="w-5 h-5 rounded-[4px] flex items-center justify-center border" :style="{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text-dim)' }" title="Disembunyikan"><EyeOff :size="11" /></div>
+  <div v-if="locked" class="w-5 h-5 rounded-[4px] flex items-center justify-center border" :style="{ background: 'var(--card)', borderColor: 'var(--border)', color: '#B7791F' }" :title="file.hint ? ('Terkunci · ' + file.hint) : 'Terkunci'"><Lock :size="11" /></div>
+ </div>
 
  <!-- thumbnail / icon area -->
  <div class="h-[86px] flex items-center justify-center border-b overflow-hidden" :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }">

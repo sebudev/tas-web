@@ -1,13 +1,13 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { store } from '../store';
-import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles } from '../composables/useApp';
+import { applyFilters, enqueueUploads, uploadUrl, deleteFiles, clearSelection, loadFiles, setFilesHidden } from '../composables/useApp';
 import { setFileLock } from '../composables/useLock';
 import { toast } from '../composables/useToast';
 import { confirmDialog } from '../composables/useConfirm';
 import { promptDialog } from '../composables/usePrompt';
 import SelectRadix from './ui/SelectRadix.vue';
-import { Upload, Link2, FolderPlus, RefreshCw, CheckSquare, Archive, FolderInput, Trash2, LayoutGrid, List, Search, Lock } from '@lucide/vue';
+import { Upload, Link2, FolderPlus, RefreshCw, CheckSquare, Archive, FolderInput, Trash2, LayoutGrid, List, Search, Lock, Eye, EyeOff } from '@lucide/vue';
 
 const fileInput = ref(null);
 const emit = defineEmits(['select', 'preview-select', 'zip', 'delete', 'move', 'toggle-folders']);
@@ -51,6 +51,17 @@ async function onLockMulti() {
  }
  toast(`🔒 ${ok}/${targets.length} file dikunci`, ok === targets.length ? 'ok' : 'err');
 }
+function toggleHidden() { store.showHidden = !store.showHidden; applyFilters(); }
+async function onHideMulti(hidden) {
+ if (store.allBots) return toast('Hide massal belum didukung di view "Semua Bot" — pilih satu bot dulu', 'err');
+ const hashes = [...store.selected];
+ if (!hashes.length) return;
+ try {
+  await setFilesHidden(hashes, hidden);
+  clearSelection();
+  toast(hidden ? '🙈 ' + hashes.length + ' file disembunyikan' : '👁 ' + hashes.length + ' file ditampilkan', 'ok');
+ } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 const sortOptions = [
  { value: 'new', label: 'Terbaru' },
  { value: 'old', label: 'Terlama' },
@@ -79,11 +90,14 @@ function toggleSelectMode() { store.selectMode = !store.selectMode; if (!store.s
 
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border" :class="store.selectMode ? 'bg-[#2383E214] border-[#2383E240] text-[#2383E2]' : 'bg-white dark:bg-[#262626] hover:bg-[var(--bg)]'" :style="store.selectMode ? {} : { borderColor: 'var(--border)', color: 'var(--text)' }" @click="toggleSelectMode"><CheckSquare :size="14" /> Pilih</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40 disabled:cursor-not-allowed" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onZip"><Archive :size="14" /> ZIP ({{ selCount }})</button>
- <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="emit('move', [...store.selected])"><FolderInput :size="14" /> Pindah</button>
+ <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0 || store.allBots" :title="store.allBots ? 'Pindah folder butuh 1 bot aktif' : 'Pindahkan ke folder'" @click="emit('move', [...store.selected])"><FolderInput :size="14" /> Pindah</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onLockMulti"><Lock :size="14" /> Kunci</button>
+ <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onHideMulti(true)"><EyeOff :size="14" /> Sembunyi</button>
+ <button v-if="store.showHidden" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-white dark:bg-[#262626] hover:bg-[var(--bg)] disabled:opacity-40" :style="{ borderColor: 'var(--border)', color: 'var(--text)' }" :disabled="selCount === 0" @click="onHideMulti(false)"><Eye :size="14" /> Tampilkan</button>
  <button class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] text-[13px] border bg-[#FFF1F1] dark:bg-[#2A1F1F] text-[#E03E3E] border-[#FFD0D0] dark:border-[#5A2E2E] hover:bg-[#FFE4E4] dark:hover:bg-[#3A2424] disabled:opacity-40" :disabled="selCount === 0" @click="onDeleteMulti"><Trash2 :size="14" /> Hapus</button>
 
  <div class="w-full sm:w-auto sm:ml-auto flex items-center gap-1.5">
+ <button class="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] border text-[12px] bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="store.showHidden ? { borderColor: '#2383E2', color: '#2383E2', background: '#2383E214' } : { borderColor: 'var(--border)', color: 'var(--text-dim)' }" :title="store.showHidden ? 'Sembunyikan lagi file/folder tersembunyi' : 'Tampilkan file/folder tersembunyi'" @click="toggleHidden"><EyeOff v-if="!store.showHidden" :size="13" /><Eye v-else :size="13" /> Tersembunyi</button>
  <button class="shrink-0 w-7 h-7 rounded-[6px] border inline-flex items-center justify-center bg-white dark:bg-[#262626] hover:bg-[var(--bg)]" :style="{ borderColor: 'var(--border)', color: 'var(--text-dim)' }" :title="store.view === 'grid' ? 'Tampilan tabel' : 'Tampilan kartu'" @click="toggleView">
  <LayoutGrid v-if="store.view !== 'grid'" :size="14" /><List v-else :size="14" />
  </button>

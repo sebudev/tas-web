@@ -1,11 +1,11 @@
 <script setup>
 import { computed } from 'vue';
 import { store } from '../store';
-import { folderChildren, folderById, openFolder, createFolder, renameFolder, deleteFolder } from '../composables/useApp';
+import { folderChildren, folderById, openFolder, createFolder, renameFolder, deleteFolder, setFolderHidden } from '../composables/useApp';
 import { confirmDialog } from '../composables/useConfirm';
 import { promptDialog } from '../composables/usePrompt';
 import { toast } from '../composables/useToast';
-import { Folder, Plus, Trash2, Pencil } from '@lucide/vue';
+import { Folder, Plus, Trash2, Pencil, Eye, EyeOff } from '@lucide/vue';
 
 const props = defineProps({
  parentId: { type: Number, default: null },
@@ -55,6 +55,12 @@ async function onDelete(f) {
  if (!ok) return;
  try { await deleteFolder(f.id); } catch (e) { toast('Gagal: ' + e.message, 'err'); }
 }
+async function onToggleHide(f) {
+ try {
+  await setFolderHidden(f.id, !f.hidden);
+  toast(f.hidden ? '👁 Folder "' + f.name + '" ditampilkan' : '🙈 Folder "' + f.name + '" disembunyikan', 'ok');
+ } catch (e) { toast('Gagal: ' + e.message, 'err'); }
+}
 </script>
 
 <template>
@@ -91,6 +97,7 @@ async function onDelete(f) {
  <div class="hidden group-hover:flex items-center gap-0.5 shrink-0 pr-1">
  <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-accent rounded" title="Subfolder baru" @click.stop="onCreate"><Plus :size="12" /></button>
  <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-accent rounded" title="Ganti nama" @click.stop="onRename(f)"><Pencil :size="12" /></button>
+ <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-accent rounded" :title="f.hidden ? 'Tampilkan folder' : 'Sembunyikan folder'" @click.stop="onToggleHide(f)"><Eye v-if="f.hidden" :size="12" /><EyeOff v-else :size="12" /></button>
  <button class="w-6 h-6 flex items-center justify-center text-txt-dim hover:text-red-400 rounded" title="Hapus folder" @click.stop="onDelete(f)"><Trash2 :size="12" /></button>
  </div>
  </div>

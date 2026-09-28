@@ -12,6 +12,7 @@ export const store = reactive({
   search: '',
   filterType: 'all',
   sort: 'new',
+  showHidden: false, // tampilkan file/folder yang disembunyikan
   view: localStorage.getItem('tasView') === 'table' ? 'table' : 'grid', // whitelist: nilai korup → default grid
   selectMode: false,
   selected: new Set(),

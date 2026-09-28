@@ -774,11 +774,13 @@ function pushJob(job, filePath, name, folderId, onDone, profile) {
       job.tmpPath = null;
       const m = outTail.match(/Hash:\s*([A-Za-z0-9]+)/);
       if (m) job.hash = m[1];
-      // auto-masuk folder kalau upload dimulai dari dalam folder
+      // auto-masuk folder kalau upload dimulai dari dalam folder (per bot)
       if (job.folderId && job.hash) {
-        if (db.prepare('SELECT id FROM folders WHERE id=?').get(job.folderId)) {
-          db.prepare('INSERT OR REPLACE INTO folder_files (folder_id, file_hash, added_at) VALUES (?,?,?)')
-            .run(job.folderId, job.hash, Date.now());
+        const pid = (profile && profile.id) || (als.getStore() || {}).profile?.id || activeProfile?.id || null;
+        const folder = pid ? db.prepare('SELECT id FROM folders WHERE id=? AND profile_id=?').get(job.folderId, pid) : null;
+        if (folder) {
+          db.prepare('INSERT OR REPLACE INTO folder_files (profile_id, folder_id, file_hash, added_at) VALUES (?,?,?,?)')
+            .run(pid, job.folderId, job.hash, Date.now());
         }
       }
       logActivity('upload', name);
@@ -1098,16 +1100,30 @@ db.exec(`CREATE TABLE IF NOT EXISTS folders (
   parent_id INTEGER,
   created_at INTEGER
 );
+-- folder_files: satu file (hash) hanya di 1 folder PER BOT (profile_id).
+-- PRIMARY KEY (profile_id, file_hash) → hash sama di bot lain = keanggotaan sendiri.
 CREATE TABLE IF NOT EXISTS folder_files (
+  profile_id INTEGER NOT NULL,
   folder_id INTEGER NOT NULL,
-  file_hash TEXT PRIMARY KEY,
-  added_at INTEGER
+  file_hash TEXT NOT NULL,
+  added_at INTEGER,
+  PRIMARY KEY (profile_id, file_hash)
+);
+-- file yang disembunyikan (per bot). File asli tetap di Telegram.
+CREATE TABLE IF NOT EXISTS hidden_files (
+  profile_id INTEGER NOT NULL,
+  file_hash TEXT NOT NULL,
+  hidden_at INTEGER,
+  PRIMARY KEY (profile_id, file_hash)
 );`);
 // kolom app_id utk api_tokens, folders & profile_id utk shares (migrasi)
 const tokCols = db.prepare('PRAGMA table_info(api_tokens)').all();
 if (!tokCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE api_tokens ADD COLUMN app_id INTEGER');
 const folderCols = db.prepare('PRAGMA table_info(folders)').all();
 if (!folderCols.some((c) => c.name === 'app_id')) db.exec('ALTER TABLE folders ADD COLUMN app_id INTEGER');
+// folder kini milik 1 bot (profile_id) + bisa disembunyikan (hidden)
+if (!folderCols.some((c) => c.name === 'profile_id')) db.exec('ALTER TABLE folders ADD COLUMN profile_id INTEGER');
+if (!folderCols.some((c) => c.name === 'hidden')) db.exec('ALTER TABLE folders ADD COLUMN hidden INTEGER DEFAULT 0');
 const shareCols = db.prepare('PRAGMA table_info(shares)').all();
 if (!shareCols.some((c) => c.name === 'profile_id')) db.exec('ALTER TABLE shares ADD COLUMN profile_id INTEGER');
 
@@ -1126,6 +1142,42 @@ const firstApp = db.prepare('SELECT id FROM apps ORDER BY id LIMIT 1').get();
 if (firstApp) {
   db.prepare('UPDATE folders SET app_id=? WHERE app_id IS NULL').run(firstApp.id);
   db.prepare('UPDATE api_tokens SET app_id=? WHERE app_id IS NULL').run(firstApp.id);
+}
+
+// --- migrasi folder per-bot ---
+// folder lama (per app) diwariskan ke bot pertama app tsb; kalau app kosong → bot pertama.
+{
+  let n = 0;
+  for (const f of db.prepare('SELECT * FROM folders WHERE profile_id IS NULL').all()) {
+    let pid = null;
+    if (f.app_id) {
+      const row = db.prepare('SELECT profile_id FROM app_profiles WHERE app_id=? ORDER BY profile_id LIMIT 1').get(f.app_id);
+      pid = row ? row.profile_id : null;
+    }
+    if (!pid) { const p = db.prepare('SELECT id FROM profiles ORDER BY id LIMIT 1').get(); pid = p ? p.id : null; }
+    if (pid) { db.prepare('UPDATE folders SET profile_id=? WHERE id=?').run(pid, f.id); n++; }
+  }
+  if (n) console.log(`🔁 ${n} folder lama dipindah ke kepemilikan bot (profile_id)`);
+}
+// folder_files lama (key global by hash) → dibangun ulang jadi per-bot (profile_id, file_hash)
+{
+  const ffCols = db.prepare('PRAGMA table_info(folder_files)').all();
+  if (!ffCols.some((c) => c.name === 'profile_id')) {
+    db.exec(`CREATE TABLE folder_files_new (
+      profile_id INTEGER NOT NULL,
+      folder_id INTEGER NOT NULL,
+      file_hash TEXT NOT NULL,
+      added_at INTEGER,
+      PRIMARY KEY (profile_id, file_hash)
+    )`);
+    db.exec(`INSERT OR IGNORE INTO folder_files_new (profile_id, folder_id, file_hash, added_at)
+             SELECT f.profile_id, ff.folder_id, ff.file_hash, ff.added_at
+             FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
+             WHERE f.profile_id IS NOT NULL`);
+    db.exec('DROP TABLE folder_files');
+    db.exec('ALTER TABLE folder_files_new RENAME TO folder_files');
+    console.log('🔁 migrasi folder_files → per-bot (profile_id, file_hash)');
+  }
 }
 
 function toApp(a) {
@@ -1150,6 +1202,52 @@ function folderInScope(f) {
   return true;
 }
 
+// bot pemilik folder untuk request ini (token scoped > body/query profileId > bot aktif)
+function folderBot(req) {
+  const ctx = als.getStore() || {};
+  if (ctx.profile) return ctx.profile;
+  const id = parseInt(req?.query?.profileId ?? req?.body?.profileId, 10);
+  if (id) { const p = db.prepare('SELECT * FROM profiles WHERE id=?').get(id); if (p) return p; }
+  return activeProfile || null;
+}
+// folder harus milik bot ini (isolation per-bot) + lolos scope token
+function folderInBotScope(f, req) {
+  if (!f) return false;
+  const bot = folderBot(req);
+  if (!bot) return false;
+  if (f.profile_id && f.profile_id !== bot.id) return false;
+  return folderInScope(f);
+}
+// peta folder tersembunyi efektif (milik sendiri ATAU leluhurnya disembunyikan)
+function folderHiddenMap(profileId) {
+  const rows = db.prepare('SELECT id, parent_id, hidden FROM folders WHERE profile_id=?').all(profileId);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const eff = new Map();
+  const calc = (id) => {
+    if (eff.has(id)) return eff.get(id);
+    const r = byId.get(id);
+    if (!r) return false;
+    eff.set(id, true); // guard siklus
+    const v = !!r.hidden || (r.parent_id ? calc(r.parent_id) : false);
+    eff.set(id, v);
+    return v;
+  };
+  for (const r of rows) calc(r.id);
+  return eff;
+}
+// file-tersembunyi efektif utk bot: eksplisit disembunyikan ATAU berada di folder tersembunyi
+function hiddenFileSet(profileId) {
+  if (!profileId) return new Set();
+  const set = new Set(db.prepare('SELECT file_hash FROM hidden_files WHERE profile_id=?').all(profileId).map((r) => r.file_hash));
+  const hf = folderHiddenMap(profileId);
+  if (hf.size) {
+    for (const row of db.prepare('SELECT folder_id, file_hash FROM folder_files WHERE profile_id=?').all(profileId)) {
+      if (hf.get(row.folder_id)) set.add(row.file_hash);
+    }
+  }
+  return set;
+}
+
 // ---------------- folders (virtual, model Google Drive) ----------------
 // File asli tetap di Telegram (flat). Folder = layer organisasi di SQLite.
 // (CREATE TABLE folders/folder_files sudah dijalankan lebih awal, sebelum migrasi app_id.)
@@ -1158,47 +1256,65 @@ function folderInScope(f) {
 db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_folders_app ON folders(app_id);
+CREATE INDEX IF NOT EXISTS idx_folders_profile ON folders(profile_id);
 CREATE INDEX IF NOT EXISTS idx_folder_files_folder ON folder_files(folder_id);
+CREATE INDEX IF NOT EXISTS idx_folder_files_profile ON folder_files(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hidden_files_profile ON hidden_files(profile_id);
 CREATE INDEX IF NOT EXISTS idx_ingest_hash ON ingest_confirmations(file_hash, profile_id);`);
 
 app.get('/api/folders', (req, res) => {
-  const appId = appIdFor(req);
-  const folders = appId
-    ? db.prepare('SELECT * FROM folders WHERE app_id=? ORDER BY name').all(appId)
-    : db.prepare('SELECT * FROM folders ORDER BY name').all();
-  const counts = db.prepare('SELECT folder_id, COUNT(*) c FROM folder_files GROUP BY folder_id').all();
+  const bot = folderBot(req);
+  const pid = bot ? bot.id : null;
+  const folders = pid ? db.prepare('SELECT * FROM folders WHERE profile_id=? ORDER BY name').all(pid) : [];
   const countMap = {};
-  for (const c of counts) countMap[c.folder_id] = c.c;
   const fileFolders = {};
-  for (const row of db.prepare('SELECT folder_id, file_hash FROM folder_files').all()) {
-    fileFolders[row.file_hash] = row.folder_id;
+  if (pid) {
+    for (const c of db.prepare('SELECT folder_id, COUNT(*) c FROM folder_files WHERE profile_id=? GROUP BY folder_id').all(pid)) countMap[c.folder_id] = c.c;
+    for (const row of db.prepare('SELECT folder_id, file_hash FROM folder_files WHERE profile_id=?').all(pid)) fileFolders[row.file_hash] = row.folder_id;
   }
+  const hidden = pid ? folderHiddenMap(pid) : new Map();
   res.json({
+    botId: pid,
     folders: folders.map((f) => ({
-      id: f.id, name: f.name, parentId: f.parent_id,
-      createdAt: f.created_at, fileCount: countMap[f.id] || 0,
+      id: f.id, name: f.name, parentId: f.parent_id, createdAt: f.created_at,
+      profileId: f.profile_id, fileCount: countMap[f.id] || 0,
+      hidden: !!f.hidden, hiddenEffective: !!hidden.get(f.id),
     })),
     fileFolders,
   });
 });
 
 app.post('/api/folders', (req, res) => {
+  const bot = folderBot(req);
+  if (!bot) return res.status(400).json({ error: 'Pilih bot dulu untuk membuat folder' });
   const name = (req.body?.name || '').trim().slice(0, 100);
   if (!name) return res.status(400).json({ error: 'Nama folder wajib diisi' });
   const parentId = req.body?.parentId ? parseInt(req.body.parentId, 10) : null;
-  if (parentId && !db.prepare('SELECT id FROM folders WHERE id=?').get(parentId)) {
-    return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
+  if (parentId) {
+    const p = db.prepare('SELECT * FROM folders WHERE id=?').get(parentId);
+    if (!p || p.profile_id !== bot.id) return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
   }
-  const info = db.prepare('INSERT INTO folders (name, parent_id, app_id, created_at) VALUES (?,?,?,?)')
-    .run(name, parentId, appIdFor(req), Date.now());
-  logActivity('folder', 'create "' + name + '"');
-  res.json({ id: info.lastInsertRowid, name, parentId, createdAt: Date.now(), fileCount: 0 });
+  const ctx = als.getStore() || {};
+  const appId = ctx.app?.id ?? appIdFor(req);
+  const info = db.prepare('INSERT INTO folders (name, parent_id, profile_id, app_id, hidden, created_at) VALUES (?,?,?,?,0,?)')
+    .run(name, parentId, bot.id, appId, Date.now());
+  logActivity('folder', 'create "' + name + '" @ ' + (bot.name || bot.id));
+  res.json({ id: info.lastInsertRowid, name, parentId, profileId: bot.id, createdAt: Date.now(), fileCount: 0, hidden: false });
+});
+
+// sembunyikan / tampilkan folder (per bot). Isi folder ikut tersembunyi (lihat hiddenFileSet).
+app.post('/api/folders/:id/hide', (req, res) => {
+  const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
+  if (!f || !folderInBotScope(f, req)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  const hidden = req.body?.hidden !== false; // default: sembunyikan
+  db.prepare('UPDATE folders SET hidden=? WHERE id=?').run(hidden ? 1 : 0, f.id);
+  logActivity(hidden ? 'hide-folder' : 'unhide-folder', f.name);
+  res.json({ ok: true, hidden });
 });
 
 app.put('/api/folders/:id', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
-  if (!f) return res.status(404).json({ error: 'Folder tidak ditemukan' });
-  if (!folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!f || !folderInBotScope(f, req)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   const name = req.body?.name !== undefined && String(req.body.name).trim()
     ? String(req.body.name).trim().slice(0, 100) : f.name;
   let parentId = f.parent_id;
@@ -1215,9 +1331,11 @@ app.put('/api/folders/:id', (req, res) => {
         const p = db.prepare('SELECT parent_id FROM folders WHERE id=?').get(cur);
         cur = p ? p.parent_id : null;
       }
-      if (!db.prepare('SELECT id FROM folders WHERE id=?').get(parentId)) {
+      if (!db.prepare('SELECT * FROM folders WHERE id=?').get(parentId)) {
         return res.status(400).json({ error: 'Folder induk tidak ditemukan' });
       }
+      const pp = db.prepare('SELECT profile_id FROM folders WHERE id=?').get(parentId);
+      if (pp && pp.profile_id !== f.profile_id) return res.status(400).json({ error: 'Folder induk milik bot lain' });
     }
   }
   db.prepare('UPDATE folders SET name=?, parent_id=? WHERE id=?').run(name, parentId, f.id);
@@ -1228,7 +1346,7 @@ app.put('/api/folders/:id', (req, res) => {
 // alias gaya POST (konsisten dgn endpoint lain di codebase)
 app.post('/api/folders/:id/rename', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
-  if (!f || !folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!f || !folderInBotScope(f, req)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   const name = (req.body?.name || '').trim().slice(0, 100);
   if (!name) return res.status(400).json({ error: 'Nama folder wajib diisi' });
   db.prepare('UPDATE folders SET name=? WHERE id=?').run(name, f.id);
@@ -1238,7 +1356,7 @@ app.post('/api/folders/:id/rename', (req, res) => {
 
 app.delete('/api/folders/:id', (req, res) => {
   const f = db.prepare('SELECT * FROM folders WHERE id=?').get(req.params.id);
-  if (!f || !folderInScope(f)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
+  if (!f || !folderInBotScope(f, req)) return res.status(404).json({ error: 'Folder tidak ditemukan' });
   db.transaction(() => {
     // subfolder naik ke parent; file pindah ke parent (atau root kalau parent kosong)
     db.prepare('UPDATE folders SET parent_id=? WHERE parent_id=?').run(f.parent_id, f.id);
@@ -1250,26 +1368,46 @@ app.delete('/api/folders/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// pindahkan file (by hash) ke folder; folderId null/kosong = kembali ke root
+// pindahkan file (by hash) ke folder; folderId null/kosong = kembali ke root.
+// Keanggotaan disimpan per bot: (profile_id, file_hash).
 app.post('/api/files/folder', (req, res) => {
+  const bot = folderBot(req);
+  if (!bot) return res.status(400).json({ error: 'Pilih bot dulu' });
   const hashes = (req.body?.hashes || []).slice(0, 100).map(String).filter(Boolean);
   if (!hashes.length) return res.status(400).json({ error: 'Pilih minimal 1 file' });
   const folderId = req.body?.folderId ? parseInt(req.body.folderId, 10) : null;
   if (folderId) {
     const folder = db.prepare('SELECT * FROM folders WHERE id=?').get(folderId);
-    if (!folder || !folderInScope(folder)) return res.status(400).json({ error: 'Folder tidak ditemukan' });
+    if (!folder || folder.profile_id !== bot.id || !folderInScope(folder)) return res.status(400).json({ error: 'Folder tidak ditemukan' });
   }
   db.transaction(() => {
     for (const h of hashes) {
-      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(h);
+      db.prepare('DELETE FROM folder_files WHERE profile_id=? AND file_hash=?').run(bot.id, h);
       if (folderId) {
-        db.prepare('INSERT OR REPLACE INTO folder_files (folder_id, file_hash, added_at) VALUES (?,?,?)')
-          .run(folderId, h, Date.now());
+        db.prepare('INSERT OR REPLACE INTO folder_files (profile_id, folder_id, file_hash, added_at) VALUES (?,?,?,?)')
+          .run(bot.id, folderId, h, Date.now());
       }
     }
   })();
-  logActivity('folder', 'move ' + hashes.length + ' file');
+  logActivity('folder', 'move ' + hashes.length + ' file @ ' + (bot.name || bot.id));
   res.json({ ok: true, count: hashes.length, folderId });
+});
+
+// sembunyikan / tampilkan file (per bot). body: { hashes:[...], hidden:true|false }
+app.post('/api/files/hide', (req, res) => {
+  const bot = folderBot(req);
+  if (!bot) return res.status(400).json({ error: 'Pilih bot dulu' });
+  const hashes = (req.body?.hashes || []).slice(0, 500).map(String).filter(Boolean);
+  if (!hashes.length) return res.status(400).json({ error: 'Pilih minimal 1 file' });
+  const hide = req.body?.hidden !== false;
+  db.transaction(() => {
+    for (const h of hashes) {
+      if (hide) db.prepare('INSERT OR REPLACE INTO hidden_files (profile_id, file_hash, hidden_at) VALUES (?,?,?)').run(bot.id, h, Date.now());
+      else db.prepare('DELETE FROM hidden_files WHERE profile_id=? AND file_hash=?').run(bot.id, h);
+    }
+  })();
+  logActivity(hide ? 'hide-file' : 'unhide-file', hashes.length + ' file @ ' + (bot.name || bot.id));
+  res.json({ ok: true, hidden: hide, count: hashes.length });
 });
 
 // token dikembalikan TERMASKER — nilai penuh hanya via /reveal (sesi login) atau saat dibuat
@@ -1341,7 +1479,8 @@ app.get('/api/files', async (req, res) => {
       const results = await Promise.all(profs.map(async (prof) => {
         try {
           const list = await tasList(prof);
-          return (Array.isArray(list) ? list : []).map((f) => ({ ...f, profileId: prof.id, profileName: prof.name, locked: !!getLock(f.hash, prof.id) }));
+          const hidden = hiddenFileSet(prof.id);
+          return (Array.isArray(list) ? list : []).map((f) => ({ ...f, profileId: prof.id, profileName: prof.name, locked: !!getLock(f.hash, prof.id), hidden: hidden.has(f.hash) }));
         } catch { return []; }
       }));
       return res.json({ files: results.flat() });
@@ -1349,8 +1488,9 @@ app.get('/api/files', async (req, res) => {
     // single-bot: bot = konteks request (token API) atau bot aktif global
     const prof = profileFromQuery(req);
     const pid = lockProfileId(prof);
+    const hidden = hiddenFileSet(pid);
     const list = await tasList(prof);
-    res.json({ files: (Array.isArray(list) ? list : []).map((f) => ({ ...f, locked: !!getLock(f.hash, pid) })) });
+    res.json({ files: (Array.isArray(list) ? list : []).map((f) => ({ ...f, locked: !!getLock(f.hash, pid), hidden: hidden.has(f.hash) })) });
   } catch (e) {
     res.status(502).json({ files: [], error: publicErrorMessage(e) });
   }
@@ -1696,6 +1836,7 @@ app.post('/api/delete/:id', (req, res) => {
   // --hard: hapus dari index DAN dari chat Telegram (sync penuh)
   if (!tasArgSafe(req.params.id)) return res.status(400).json({ error: 'ID tidak valid' });
   const prof = profileFromQuery(req);
+  const pid = prof ? prof.id : (activeProfile ? activeProfile.id : null);
   const child = spawn('tas', ['delete', req.params.id, '--hard'], { env: tasEnv(prof) });
   let out = '';
   child.stdout.on('data', (d) => { out = (out + d).slice(-600); });
@@ -1708,8 +1849,14 @@ app.post('/api/delete/:id', (req, res) => {
     if (code === 0) {
       logActivity('delete', req.params.id.slice(0, 16));
       invalidateTasCache();
-      // bersihkan mapping folder (id = hash karena frontend kirim f.hash)
-      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(req.params.id);
+      // bersihkan mapping folder & status hidden (per bot; id = hash)
+      if (pid) {
+        db.prepare('DELETE FROM folder_files WHERE profile_id=? AND file_hash=?').run(pid, req.params.id);
+        db.prepare('DELETE FROM hidden_files WHERE profile_id=? AND file_hash=?').run(pid, req.params.id);
+      } else {
+        db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(req.params.id);
+        db.prepare('DELETE FROM hidden_files WHERE file_hash=?').run(req.params.id);
+      }
       // hapus juga pesan konfirmasi ✅ bot-ingest di chat (kalau ada)
       try {
         const ctx = als.getStore() || {};
@@ -2543,7 +2690,8 @@ app.put('/s3/:bucket/*', async (req, res) => {
       invalidateTasCache();
     } else if (existing) {
       await new Promise((resolve) => deleteByName(prof, existing.hash, resolve));
-      db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(existing.hash);
+      db.prepare('DELETE FROM folder_files WHERE profile_id=? AND file_hash=?').run(effProfileId(prof), existing.hash);
+      db.prepare('DELETE FROM hidden_files WHERE profile_id=? AND file_hash=?').run(effProfileId(prof), existing.hash);
     }
     const job = createJob(key);
     job.size = fs.statSync(tmpPath).size;
@@ -2597,7 +2745,8 @@ app.delete('/s3/:bucket/*', async (req, res) => {
       return res.status(204).end();
     }
     await new Promise((resolve) => deleteByName(prof, rec.hash, resolve));
-    db.prepare('DELETE FROM folder_files WHERE file_hash=?').run(rec.hash);
+    db.prepare('DELETE FROM folder_files WHERE profile_id=? AND file_hash=?').run(effProfileId(prof), rec.hash);
+    db.prepare('DELETE FROM hidden_files WHERE profile_id=? AND file_hash=?').run(effProfileId(prof), rec.hash);
     res.status(204).end();
   } catch (e) {
     s3Err(res, 500, 'InternalError', publicErrorMessage(e));

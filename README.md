@@ -8,7 +8,8 @@ cloud storage gratis & terenkripsi (AES-256-GCM), dengan UI ber-design system **
 - **🔐 Auth** — login password (SQLite: users + sessions), API token untuk integrasi
 - **🤖 Multi-bot** — kelola beberapa bot Telegram (storage terpisah) + switch kapan saja
 - **📦 Layer App (workspace)** — kelompokkan bot jadi app; API token & folder bisa di-scope per app
-- **🗂️ Folder virtual** (model Google Drive) — folder bertingkat, 1 file di 1 folder; file asli tetap di Telegram
+- **🗂️ Folder virtual (model Google Drive)** — folder bertingkat **milik per bot** (1 folder = 1 storage/bot), 1 file di 1 folder; file asli tetap di Telegram
+- **🙈 Sembunyikan file & folder** — sembunyikan per bot; folder yang disembunyikan ikut menyembunyikan isinya. Toggle "Tersembunyi" untuk menampilkan
 - **🗄️ S3-compatible gateway** — endpoint `/s3` path-style + AWS SigV4; 1 bot = 1 bucket; bisa dipakai rclone / SDK S3
 - **📥 Bot ingest** — kirim file langsung ke bot → otomatis masuk storage (pesan asli dihapus, limit 20MB)
 - **🔑 API tokens per bot** — token integrasi terikat ke bot/app tertentu (halaman `/api.html`)
@@ -80,9 +81,11 @@ Semua endpoint butuh `Authorization: Bearer <API_TOKEN>` kecuali yang ditandai *
 | `GET /api/apps` · `POST /api/apps` | Daftar / buat app (workspace) |
 | `POST /api/apps/:id/rename` · `DELETE /api/apps/:id` | Rename / hapus app |
 | `POST /api/apps/:id/bots` · `DELETE /api/apps/:id/bots/:profileId` | Attach / detach bot ke app |
-| `GET /api/folders` · `POST /api/folders` | Daftar / buat folder virtual |
+| `GET /api/folders` · `POST /api/folders` | Daftar / buat folder virtual (**per bot** — `?profileId=` / body `profileId`) |
 | `POST /api/folders/:id/rename` · `DELETE /api/folders/:id` | Rename / hapus folder (file naik ke parent) |
-| `POST /api/files/folder` | Pindahkan file ke folder (`?profileId=` utk multi-bot) |
+| `POST /api/folders/:id/hide` | Sembunyikan / tampilkan folder (`{hidden:true|false}`); isi folder ikut tersembunyi |
+| `POST /api/files/folder` | Pindahkan file ke folder (**per bot**) |
+| `POST /api/files/hide` | Sembunyikan / tampilkan file (`{hashes:[], hidden:true|false}`) |
 | `GET /api/tokens` · `POST /api/tokens` · `DELETE /api/tokens/:id` | API token per bot (bisa di-scope per app) |
 | `GET /api/status` · `GET /api/files` | Status & daftar file (`?all=1` agregasi semua bot, `?folderId=`, `?profileId=`) |
 | `POST /api/upload` (multi) · `POST /api/upload-url` | Upload file / dari URL |

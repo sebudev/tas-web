@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { Eye, Download, Copy, Share2, FolderInput, Info, Trash2, Lock, Unlock } from '@lucide/vue';
+import { Eye, EyeOff, Download, Copy, Share2, FolderInput, Info, Trash2, Lock, Unlock } from '@lucide/vue';
 
-const iconMap = { Eye, Download, Copy, Share2, FolderInput, Info, Trash2, Lock, Unlock };
+const iconMap = { Eye, EyeOff, Download, Copy, Share2, FolderInput, Info, Trash2, Lock, Unlock };
 
 const props = defineProps({
  items: { type: Array, default: () => [] },
