@@ -23,7 +23,7 @@ async function saveEdit(f) {
 <template>
  <div class="flex items-center gap-1 text-[13px] px-1 py-1 overflow-x-auto whitespace-nowrap">
  <button
- class="px-2 py-1 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626] flex items-center gap-1.5"
+ class="px-2 py-1 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626] flex items-center gap-1.5 shrink-0 whitespace-nowrap"
  :style="{ color: !store.currentFolder ? 'var(--text)' : 'var(--text-dim)' }"
  :class="!store.currentFolder ? 'font-semibold bg-[#EFEFED] dark:bg-[#2A2A2A]' : ''"
  @click="openFolder(null)"
@@ -36,7 +36,7 @@ async function saveEdit(f) {
  </div>
  <button
  v-else
- class="px-2 py-1 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626]"
+ class="px-2 py-1 rounded hover:bg-[#F7F7F5] dark:hover:bg-[#262626] inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap"
  :style=" i === breadcrumb.length - 1 ? { color: 'var(--text)', background: 'var(--bg-2)', fontWeight: 600 } : { color: 'var(--text)' }"
  :class="i === breadcrumb.length - 1 ? 'dark:!bg-[#2A2A2A] dark:!text-[#F5F5F5]' : ''"
  @click="openFolder(f.id)"

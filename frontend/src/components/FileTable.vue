@@ -71,11 +71,11 @@ const folderOf = (hash) => {
  </td>
  <td class="px-3 py-2 align-middle whitespace-nowrap" :style="{ color: 'var(--text-dim)' }">{{ fmtBytes(f.original_size) }}</td>
  <td class="px-3 py-2 align-middle">
- <span v-if="folderOf(f.hash)" class="text-[11px] px-1.5 py-0.5 rounded border" :style="{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text-dim)' }"><Folder :size="12" /> {{ folderOf(f.hash).name }}</span>
+ <span v-if="folderOf(f.hash)" class="text-[11px] px-1.5 py-0.5 rounded border inline-flex items-center gap-1 whitespace-nowrap align-middle" :style="{ background: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text-dim)' }"><Folder :size="12" class="shrink-0" /> {{ folderOf(f.hash).name }}</span>
  <span v-else class="text-[11px] opacity-30">—</span>
  </td>
  <td class="px-3 py-2 align-middle">
- <span v-if="f.profileName" class="text-[11px]" :style="{ color: 'var(--text-dim)' }"><Bot :size="12" /> {{ f.profileName }}</span>
+ <span v-if="f.profileName" class="text-[11px] inline-flex items-center gap-1 whitespace-nowrap align-middle" :style="{ color: 'var(--text-dim)' }"><Bot :size="12" class="shrink-0" /> {{ f.profileName }}</span>
  <span v-else class="text-[11px] opacity-30">—</span>
  </td>
  <td class="px-3 py-2 align-middle text-[12px] whitespace-nowrap" :style="{ color: 'var(--text-dim)' }">{{ fmtDate(f.created_at) }}</td>
